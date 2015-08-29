@@ -55,3 +55,6 @@ set wildmenu
 
 nnoremap v V
 nnoremap V v
+
+set incsearch
+set hlsearch
