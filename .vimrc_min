@@ -49,3 +49,6 @@ nnoremap S :let @0 = substitute(@0, "\\s\\+$","","g")<cr>ea<space><esc>bdiw"0Plx
 vnoremap S "0p
 
 set autoindent
+
+set wildmode=longest,list,full
+set wildmenu
