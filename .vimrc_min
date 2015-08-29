@@ -47,3 +47,5 @@ set number
 
 nnoremap S :let @0 = substitute(@0, "\\s\\+$","","g")<cr>ea<space><esc>bdiw"0Plxb
 vnoremap S "0p
+
+set autoindent
