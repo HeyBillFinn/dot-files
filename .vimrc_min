@@ -42,6 +42,7 @@ set shiftwidth=2
 set tabstop=2
 
 set backupdir=$TEMP,$TMP,.
+set directory=$TEMP,$TMP,/tmp//,/var//tmp,.
 
 set number
 
