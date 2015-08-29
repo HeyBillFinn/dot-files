@@ -36,3 +36,7 @@ nmap _ o<esc>
 
 syntax on
 colorscheme darkblue
+
+set expandtab
+set shiftwidth=2
+set tabstop=2
