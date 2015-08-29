@@ -52,3 +52,6 @@ set autoindent
 
 set wildmode=longest,list,full
 set wildmenu
+
+nnoremap v V
+nnoremap V v
