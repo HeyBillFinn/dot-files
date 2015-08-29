@@ -33,3 +33,6 @@ nmap ,q <c-w>q
 
 nmap - O<esc>
 nmap _ o<esc>
+
+syntax on
+colorscheme darkblue
