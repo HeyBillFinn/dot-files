@@ -1,0 +1,27 @@
+function! WinMove(key)
+  let t:curwin = winnr()
+  exec "wincmd ".a:key
+  if (t:curwin == winnr()) "we havent moved
+    if (0 == match(a:key,'[jk]')) "were we going up/down
+      exec "sp"
+      if (0 == match(a:key, 'j'))
+          exec "wincmd j"
+      else
+          exec "wincmd k"
+      endif
+    else
+      exec "vsp"
+      if (0 == match(a:key, 'l'))
+          exec "wincmd l"
+      else
+          exec "wincmd h"
+      endif
+    endif
+    "exec "wincmd ".a:key
+  endif
+endfunction
+
+nnoremap <silent> ,h              :call WinMove('h')<cr>
+nnoremap <silent> ,k              :call WinMove('k')<cr>
+nnoremap <silent> ,l              :call WinMove('l')<cr>
+nnoremap <silent> ,j              :call WinMove('j')<cr>
