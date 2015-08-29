@@ -1,0 +1,4 @@
+PROMPT=$'
+%n@%m in \033[34m%~ \033[0m
+%D{%a %b %d %T} > '
+RPROMPT='[%?]'
