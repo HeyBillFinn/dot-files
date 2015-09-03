@@ -59,5 +59,7 @@ nnoremap V v
 
 set incsearch
 set hlsearch
+set ignorecase
+set smartcase
 
 nnoremap <silent> <Space> :nohlsearch<Bar>:echo<CR>
