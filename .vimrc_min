@@ -24,10 +24,10 @@ function! WinMove(key)
   endif
 endfunction
 
-nnoremap <silent> ,h              :call WinMove('h')<cr>
-nnoremap <silent> ,k              :call WinMove('k')<cr>
-nnoremap <silent> ,l              :call WinMove('l')<cr>
-nnoremap <silent> ,j              :call WinMove('j')<cr>
+nnoremap <silent> ,h :call WinMove('h')<cr>
+nnoremap <silent> ,k :call WinMove('k')<cr>
+nnoremap <silent> ,l :call WinMove('l')<cr>
+nnoremap <silent> ,j :call WinMove('j')<cr>
 
 nmap ,q <c-w>q
 
@@ -53,6 +53,7 @@ set autoindent
 
 set wildmode=longest,list,full
 set wildmenu
+set wildignore+=*/tmp/*,*.so,*.swp,*.zip
 
 nnoremap v V
 nnoremap V v
@@ -68,3 +69,7 @@ autocmd FileType c,cpp,java,php,ruby,python autocmd BufWritePre <buffer> :%s/\s\
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
+
+set listchars=tab:▸\ ,trail:·
+set list
+set relativenumber
