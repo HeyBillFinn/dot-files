@@ -14,6 +14,10 @@ function find_line {
 function append_command_to_file {
   file="$1"
   command_to_append="$2"
+  if [ ! -f $file ]; then
+    echo "File $file does not exist."
+    exit -1
+  fi
   if [ -f $file ]; then
     if find_line "$file" "$command_to_append"; then
       echo "Command '$command_to_append' already in $file."
@@ -29,9 +33,25 @@ function append_command_to_file {
 files_to_edit=( ~/.zshrc ~/.bashrc ~/.tmux.conf ~/.vimrc )
 commands_to_append=( "source" "source" "source-file" "source" )
 file_arguments_to_append=( "$current_directory/.zshrc_min"
-                              "$current_directory/.bashrc_min"
-                              "$current_directory/.tmux_min.conf"
-                              "$current_directory/.vimrc_min" )
+                           "$current_directory/.bashrc_min"
+                           "$current_directory/.tmux_min.conf"
+                           "$current_directory/.vimrc_min" )
+FULL=0
+if [ -n "$1" ]; then
+  case $1 in
+    -f)
+    FULL=1
+    second_file_arguments_to_append=( "$current_directory/.zshrc_min"
+                                      "$current_directory/.bashrc_min"
+                                      "$current_directory/.tmux_min.conf"
+                                      "$current_directory/.vimrc" )
+    ;;
+    *)
+    echo "Unknown argument $1."
+    exit -1
+    ;;
+  esac
+fi
 
 num_files_to_edit=${#files_to_edit[@]}
 num_commands_to_append=${#commands_to_append[@]}
@@ -44,11 +64,11 @@ fi
 
 for i in `seq 1 $num_files_to_edit`; do
   file=${files_to_edit[$i-1]}
-  command_to_append=${commands_to_append[$i-1]}
+  cmd_to_append=${commands_to_append[$i-1]}
   file_argument_to_append=${file_arguments_to_append[$i-1]}
-  if [ ! -f $file_argument_to_append ]; then
-    echo "File $file_argument_to_append does not exist."
-    exit -1
+  append_command_to_file $file "$cmd_to_append $file_argument_to_append"
+  if [ $FULL -eq 1 ]; then
+    second_file_argument_to_append=${second_file_arguments_to_append[$i-1]}
+    append_command_to_file $file "$cmd_to_append $second_file_argument_to_append"
   fi
-  append_command_to_file $file "$command_to_append $file_argument_to_append"
 done
