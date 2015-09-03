@@ -27,7 +27,7 @@ function append_command_to_file {
     fi
   else
     echo "File $file doesn't exist. Creating it."
-    echo $command_to_append >> $file
+    echo $command_to_append > $file
   fi
 }
 
