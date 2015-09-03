@@ -23,6 +23,7 @@ function append_command_to_file {
       echo "Command '$command_to_append' already in $file."
     else
       echo $command_to_append >> $file
+      echo "Appended $command_to_append to $file."
     fi
   else
     echo "File $file doesn't exist. Creating it."
