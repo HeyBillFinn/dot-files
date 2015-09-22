@@ -14,10 +14,6 @@ function find_line {
 function append_command_to_file {
   file="$1"
   command_to_append="$2"
-  if [ ! -f $file ]; then
-    echo "File $file does not exist."
-    exit -1
-  fi
   if [ -f $file ]; then
     if find_line "$file" "$command_to_append"; then
       echo "Command '$command_to_append' already in $file."
