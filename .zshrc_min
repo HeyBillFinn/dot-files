@@ -6,3 +6,4 @@ PROMPT=$'
 RPROMPT='[%?]'
 
 bindkey '^R' history-incremental-search-backward
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
