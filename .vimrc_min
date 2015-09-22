@@ -28,6 +28,7 @@ nnoremap <silent> ,h :call WinMove('h')<cr>
 nnoremap <silent> ,k :call WinMove('k')<cr>
 nnoremap <silent> ,l :call WinMove('l')<cr>
 nnoremap <silent> ,j :call WinMove('j')<cr>
+nnoremap ,= <c-w>=
 
 nmap ,q <c-w>q
 
@@ -73,3 +74,6 @@ cabbr src source ~/.vimrc
 set listchars=tab:▸\ ,trail:·
 set list
 set relativenumber
+
+nnoremap Y "+y
+nnoremap ,p "+p
