@@ -1,4 +1,5 @@
 set nocompatible
+set clipboard=unnamed
 filetype off                   " required!
 
 set rtp+=~/.vim/bundle/vundle/
