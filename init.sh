@@ -38,7 +38,7 @@ if [ -n "$1" ]; then
   case $1 in
     -f)
     FULL=1
-    git clone https://github.com/gmarik/vundle.git ~/.vim/bundle/vundle
+    git clone https://github.com/VundleVim/Vundle.vim ~/.vim/bundle/Vundle.vim
     second_file_arguments_to_append=( "$current_directory/.zshrc_min"
                                       "$current_directory/.bashrc_min"
                                       "$current_directory/.tmux_min.conf"
