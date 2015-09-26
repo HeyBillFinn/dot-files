@@ -17,3 +17,4 @@ nnoremap ,b :CtrlPBuffer<cr>
 autocmd vimenter * if !argc() | NERDTree | endif
 nnoremap ,n :NERDTreeToggle<CR>
 let NERDTreeIgnore = ['\.pyc$']
+au FileType gitcommit set tw=72
