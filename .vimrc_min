@@ -67,6 +67,7 @@ set smartcase
 nnoremap <silent> <Space> :nohlsearch<Bar>:echo<CR>
 
 autocmd FileType c,cpp,java,php,ruby,python autocmd BufWritePre <buffer> :%s/\s\+$//e
+autocmd FileType python setlocal shiftwidth=4 tabstop=4
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
