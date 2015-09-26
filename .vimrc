@@ -16,3 +16,4 @@ filetype plugin indent on    " required
 nnoremap ,b :CtrlPBuffer<cr>
 autocmd vimenter * if !argc() | NERDTree | endif
 nnoremap ,n :NERDTreeToggle<CR>
+let NERDTreeIgnore = ['\.pyc$']
