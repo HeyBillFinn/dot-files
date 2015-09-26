@@ -1,3 +1,5 @@
+#! /bin/bash
+
 current_directory=${PWD}
 
 function find_line {
