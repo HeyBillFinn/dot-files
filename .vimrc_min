@@ -54,7 +54,7 @@ set autoindent
 
 set wildmode=longest,list,full
 set wildmenu
-set wildignore+=*/tmp/*,*.so,*.swp,*.zip
+set wildignore+=*/tmp/*,*.so,*.swp,*.zip,*.pyc
 
 nnoremap v V
 nnoremap V v
@@ -67,7 +67,7 @@ set smartcase
 nnoremap <silent> <Space> :nohlsearch<Bar>:echo<CR>
 
 autocmd FileType c,cpp,java,php,ruby,python autocmd BufWritePre <buffer> :%s/\s\+$//e
-autocmd FileType python setlocal shiftwidth=4 tabstop=4
+autocmd FileType python,javascript,html,java setlocal shiftwidth=4 tabstop=4
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
@@ -78,3 +78,19 @@ set relativenumber
 
 nnoremap Y "+y
 nnoremap ,p "+p
+
+" Used by watchmedo, so only one event triggers per save
+set nobackup
+set nowritebackup
+set backupcopy=no
+
+" let &colorcolumn=join(range(81,999),",")
+highlight ColorColumn ctermbg=9
+nnoremap <silent> ,[
+      \ :if !exists('w:long_line_match') <Bar>
+      \   silent! execute "set colorcolumn=" . join(range(81,335), ',') <Bar>
+      \   let w:long_line_match = 'true' <Bar>
+      \ else <Bar>
+      \   silent! execute "set colorcolumn=0" <Bar>
+      \   unlet w:long_line_match <Bar>
+      \ endif<CR>
