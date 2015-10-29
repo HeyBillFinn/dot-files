@@ -62,6 +62,18 @@ if [ $num_files_to_edit -ne $num_commands_to_append ] ||
   exit -1
 fi
 
+ERROR=0
+for i in `seq 1 $num_files_to_edit`; do
+  file_argument_to_append=${file_arguments_to_append[$i-1]}
+  if [ ! -e "$file_argument_to_append" ]; then
+    echo "File not found: $file_argument_to_append"
+    ERROR=1
+  fi
+done
+if [ $ERROR -eq 1 ] ; then
+  exit -1
+fi
+
 for i in `seq 1 $num_files_to_edit`; do
   file=${files_to_edit[$i-1]}
   cmd_to_append=${commands_to_append[$i-1]}
@@ -72,3 +84,6 @@ for i in `seq 1 $num_files_to_edit`; do
     append_command_to_file $file "$cmd_to_append $second_file_argument_to_append"
   fi
 done
+
+append_command_to_file ~/.zshrc "export PATH=$current_directory/bin/:\$PATH"
+append_command_to_file ~/.bashrc "export PATH=$current_directory/bin/:\$PATH"
