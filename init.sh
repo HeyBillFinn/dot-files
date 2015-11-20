@@ -41,6 +41,10 @@ if [ -n "$1" ]; then
     -f)
     FULL=1
     git clone https://github.com/VundleVim/Vundle.vim ~/.vim/bundle/Vundle.vim
+    pip install watchdog
+    sudo apt-get install ack-grep
+    mkdir -p ~/.config
+    echo "max-line-length = 80" > ~/.config/flake8
     second_file_arguments_to_append=( "$current_directory/.zshrc_min"
                                       "$current_directory/.bashrc_min"
                                       "$current_directory/.tmux_min.conf"

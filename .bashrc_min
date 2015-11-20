@@ -26,5 +26,9 @@ PROMPT_COMMAND="run_on_prompt_command"
 alias phgrep='cat ~/dot-files/.persistent_history|grep --color'
 alias ag='ack-grep'
 alias k='fc -s'
+alias gchrome='google-chrome --high-dpi-support=1 --force-device-scale-factor=1 > /dev/null 2>&1 &'
 bind "set completion-ignore-case on"
 bind "set show-all-if-ambiguous on"
+
+alias watchgulp='watchmedo shell-command --patterns="*.css;*.js;*.html" --recursive --command="killall gulp; gulp --debug" za_ui/'
+alias gpush='git push -u origin HEAD'

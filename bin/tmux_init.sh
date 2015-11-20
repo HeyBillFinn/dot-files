@@ -40,6 +40,8 @@ if [ $? != 0 ]; then
   vagrant_ssh
   tmux send-keys -t $SESSIONNAME "cd ~/Projects/Angaza/payg-backend" C-m
   tmux split-window -t $SESSIONNAME -h
+  vagrant_ssh
+  tmux rename-window  -t $SESSIONNAME "server"
 fi
 
 tmux attach -t $SESSIONNAME
