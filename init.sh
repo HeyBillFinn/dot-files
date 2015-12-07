@@ -42,9 +42,12 @@ if [ -n "$1" ]; then
     FULL=1
     git clone https://github.com/VundleVim/Vundle.vim ~/.vim/bundle/Vundle.vim
     pip install watchdog
-    sudo apt-get install ack-grep
+    # vim-gnome provides clipboard support
+    sudo apt-get install ack-grep ctags vim-gnome
     mkdir -p ~/.config
     echo "max-line-length = 80" > ~/.config/flake8
+    echo "export PATH=~/dot-files/bin/:$PATH" >> ~/.bashrc
+    echo "export PATH=~/dot-files/bin/:$PATH" >> ~/.zshrc
     second_file_arguments_to_append=( "$current_directory/.zshrc_min"
                                       "$current_directory/.bashrc_min"
                                       "$current_directory/.tmux_min.conf"

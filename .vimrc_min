@@ -29,6 +29,7 @@ nnoremap <silent> ,k :call WinMove('k')<cr>
 nnoremap <silent> ,l :call WinMove('l')<cr>
 nnoremap <silent> ,j :call WinMove('j')<cr>
 nnoremap ,= <c-w>=
+nnoremap ,o <c-w>o
 
 nmap ,q <c-w>q
 
@@ -66,8 +67,9 @@ set smartcase
 
 nnoremap <silent> <Space> :nohlsearch<Bar>:echo<CR>
 
+cabbr trim %s/\s\+$//e
 autocmd FileType conf,xml,java,vim,c,cpp,java,php,ruby,python,javascript autocmd BufWritePre <buffer> :%s/\s\+$//e
-autocmd FileType xml,python,javascript,html,java setlocal shiftwidth=4 tabstop=4
+autocmd FileType xml,python,javascript,html,java,c setlocal shiftwidth=4 tabstop=4
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
@@ -76,8 +78,14 @@ set listchars=tab:▸\ ,trail:·
 set list
 set relativenumber
 
+nnoremap <C-N><C-N> :set invnumber<CR>:set invrelativenumber<CR>
+
 nnoremap Y "+y
 nnoremap ,p "+p
+
+" Move visual block
+vnoremap J :m '>+1<CR>gv=gv
+vnoremap K :m '<-2<CR>gv=gv
 
 " Used by watchmedo, so only one event triggers per save
 set nobackup

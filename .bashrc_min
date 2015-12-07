@@ -15,6 +15,11 @@ log_bash_persistent_history()
     export PERSISTENT_HISTORY_LAST="$command_part"
   fi
 }
+watch_cc()
+{
+    echo "Running $PERSISTENT_HISTORY_LAST"
+    watchmedo shell-command --patterns="*.c;*.h" --recursive --command="echo Running...; $PERSISTENT_HISTORY_LAST"
+}
 
 # Stuff to do on PROMPT_COMMAND
 run_on_prompt_command()

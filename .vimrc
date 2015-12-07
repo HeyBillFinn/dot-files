@@ -9,17 +9,21 @@ Plugin 'scrooloose/nerdtree'
 Plugin 'kien/ctrlp.vim'
 Plugin 'tpope/vim-vinegar'
 "Plugin 'nvie/vim-flake8'
+Plugin 'vim-scripts/JavaScript-Indent'
 Plugin 'vimwiki/vimwiki'
 Plugin 'scrooloose/syntastic'
+Plugin 'airblade/vim-gitgutter'
 
 call vundle#end()            " required
 filetype plugin indent on    " required
+
+nnoremap ]p :GitGutterPreview<cr>
 
 nnoremap ,b :CtrlPBuffer<cr>
 nnoremap ,w :CtrlPCurWD<cr>
 let g:ctrlp_custom_ignore = {
   \   'dir': '\v[\/](dist|\.git|build)$',
-  \   'file': '\v\.(exe|so|dll|class|apk|pyc|bin|dex|jar|png)$',
+  \   'file': '\v\.(exe|so|dll|class|apk|pyc|bin|dex|jar|png|prepreed.c|obfuscated.c|obfmap|o)$',
   \ }
 "Auto-open NerdTree for empty vim session
 "autocmd vimenter * if !argc() | NERDTree | endif
