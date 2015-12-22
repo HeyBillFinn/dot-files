@@ -11,7 +11,7 @@ log_bash_persistent_history()
   local command_part="${BASH_REMATCH[2]}"
   if [ "$command_part" != "$PERSISTENT_HISTORY_LAST" ]
   then
-    echo $date_part "|" "$command_part" >> ~/dot-files/.persistent_history
+    echo $date_part "|" $HOSTNAME "|" "$command_part" >> ~/dot-files/.persistent_history
     export PERSISTENT_HISTORY_LAST="$command_part"
   fi
 }
@@ -19,6 +19,18 @@ watch_cc()
 {
     echo "Running $PERSISTENT_HISTORY_LAST"
     watchmedo shell-command --patterns="*.c;*.h" --recursive --command="echo Running...; $PERSISTENT_HISTORY_LAST"
+}
+
+now_watch()
+{
+    echo "Running $PERSISTENT_HISTORY_LAST"
+    command=$PERSISTENT_HISTORY_LAST
+    patterns=""
+    for var in "$@"
+    do
+        patterns="$patterns;*.$var"
+    done
+    watchmedo shell-command --patterns="$patterns" --recursive --command="echo Running...; $command"
 }
 
 # Stuff to do on PROMPT_COMMAND
@@ -37,3 +49,4 @@ bind "set show-all-if-ambiguous on"
 
 alias watchgulp='watchmedo shell-command --patterns="*.css;*.js;*.html" --recursive --command="killall gulp; gulp --debug" za_ui/'
 alias gpush='git push -u origin HEAD'
+alias gmaster='git checkout master && git pull'

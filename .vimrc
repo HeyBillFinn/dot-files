@@ -8,16 +8,20 @@ Plugin 'VundleVim/Vundle.vim'
 Plugin 'scrooloose/nerdtree'
 Plugin 'kien/ctrlp.vim'
 Plugin 'tpope/vim-vinegar'
+Plugin 'tpope/vim-fugitive'
 "Plugin 'nvie/vim-flake8'
 Plugin 'vim-scripts/JavaScript-Indent'
 Plugin 'vimwiki/vimwiki'
 Plugin 'scrooloose/syntastic'
 Plugin 'airblade/vim-gitgutter'
+Plugin 'tpope/vim-surround'
+Plugin 'bling/vim-airline'
 
 call vundle#end()            " required
 filetype plugin indent on    " required
 
 nnoremap ]p :GitGutterPreview<cr>
+nnoremap ]r :GitGutterRevert<cr>
 
 nnoremap ,b :CtrlPBuffer<cr>
 nnoremap ,w :CtrlPCurWD<cr>

@@ -80,6 +80,7 @@ set relativenumber
 
 nnoremap <C-N><C-N> :set invnumber<CR>:set invrelativenumber<CR>
 
+vnoremap Y "+y
 nnoremap Y "+y
 nnoremap ,p "+p
 
@@ -102,3 +103,6 @@ nnoremap <silent> ,[
       \   silent! execute "set colorcolumn=0" <Bar>
       \   unlet w:long_line_match <Bar>
       \ endif<CR>
+
+set laststatus=2
+set colorcolumn=80
