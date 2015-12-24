@@ -15,23 +15,6 @@ log_bash_persistent_history()
     export PERSISTENT_HISTORY_LAST="$command_part"
   fi
 }
-watch_cc()
-{
-    echo "Running $PERSISTENT_HISTORY_LAST"
-    watchmedo shell-command --patterns="*.c;*.h" --recursive --command="echo Running...; $PERSISTENT_HISTORY_LAST"
-}
-
-now_watch()
-{
-    echo "Running $PERSISTENT_HISTORY_LAST"
-    command=$PERSISTENT_HISTORY_LAST
-    patterns=""
-    for var in "$@"
-    do
-        patterns="$patterns;*.$var"
-    done
-    watchmedo shell-command --patterns="$patterns" --recursive --command="echo Running...; $command"
-}
 
 # Stuff to do on PROMPT_COMMAND
 run_on_prompt_command()
@@ -47,6 +30,5 @@ alias gchrome='google-chrome --high-dpi-support=1 --force-device-scale-factor=1 
 bind "set completion-ignore-case on"
 bind "set show-all-if-ambiguous on"
 
-alias watchgulp='watchmedo shell-command --patterns="*.css;*.js;*.html" --recursive --command="killall gulp; gulp --debug" za_ui/'
 alias gpush='git push -u origin HEAD'
 alias gmaster='git checkout master && git pull'

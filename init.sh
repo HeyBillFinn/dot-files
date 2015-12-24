@@ -44,11 +44,16 @@ if [ -n "$1" ]; then
     git clone https://github.com/VundleVim/Vundle.vim ~/.vim/bundle/Vundle.vim
     # pip install watchdog
     # vim-gnome provides clipboard support
-    sudo apt-get install ack-grep ctags vim-gnome
+    sudo apt-get install tmux ack-grep ctags vim-gnome silversearcher-ag python-pip
+    sudo pip install virtualenv
+    mkdir -p ~/.virtualenvs
+    virtualenv ~/.virtualenvs/venv
+    . ~/.virtualenvs/venv/bin/activate
+    pip install watchdog
     mkdir -p ~/.config
     echo "max-line-length = 80" > ~/.config/flake8
     second_file_arguments_to_append=( "$current_directory/.zshrc_min"
-                                      "$current_directory/.bashrc_min"
+                                      "$current_directory/.bashrc"
                                       "$current_directory/.tmux_min.conf"
                                       "$current_directory/.vimrc" )
     ;;
