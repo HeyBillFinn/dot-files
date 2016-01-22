@@ -46,12 +46,18 @@ if [ -n "$1" ]; then
     # vim-gnome provides clipboard support
     sudo apt-get install tmux ack-grep ctags vim-gnome silversearcher-ag python-pip
     sudo pip install virtualenv
-    mkdir -p ~/.virtualenvs
-    virtualenv ~/.virtualenvs/venv
-    . ~/.virtualenvs/venv/bin/activate
+    mkdir -p ~/local
+    if [ ! -d ~/local/venv ]; then
+        virtualenv ~/local/venv
+    fi
+    # Let's always activate our virtual env
+    source ~/local/venv/bin/activate
     pip install watchdog
     mkdir -p ~/.config
-    echo "max-line-length = 80" > ~/.config/flake8
+    if [ ! -f ~/.config/flake8 ]; then
+      echo "[flake8]" > ~/.config/flake8
+      echo "max-line-length = 80" > ~/.config/flake8
+    fi
     second_file_arguments_to_append=( "$current_directory/.zshrc_min"
                                       "$current_directory/.bashrc"
                                       "$current_directory/.tmux_min.conf"
@@ -98,3 +104,7 @@ done
 
 append_command_to_file ~/.zshrc "export PATH=$current_directory/bin/:\$PATH"
 append_command_to_file ~/.bashrc "export PATH=$current_directory/bin/:\$PATH"
+# Sourcing the virtual env should be last, please
+if [ $FULL -eq 1 ]; then
+  append_command_to_file ~/.bashrc "source ~/local/venv/bin/activate"
+fi

@@ -1,6 +1,7 @@
 set -o vi
 export EDITOR=vim
 
+PERSISTENT_HISTORY_FILE="$HOME/dot-files/.persistent_history"
 HISTTIMEFORMAT="%F %T "
 log_bash_persistent_history()
 {
@@ -9,9 +10,15 @@ log_bash_persistent_history()
   ]]
   local date_part="${BASH_REMATCH[1]}"
   local command_part="${BASH_REMATCH[2]}"
-  if [ "$command_part" != "$PERSISTENT_HISTORY_LAST" ]
+  if [ "$command_part" != "$PERSISTENT_HISTORY_LAST" ] && \
+    [[ $command_part != "phgrep "* ]]
   then
-    echo $date_part "|" $HOSTNAME "|" "$command_part" >> ~/dot-files/.persistent_history
+    if [[ $command_part == "ph "* ]]
+    then
+      parsed_command=$(echo $command_part | awk '{print $2}')
+      command_part=$(_ph_get_command $parsed_command)
+    fi
+    echo $date_part "|" $HOSTNAME "|" "$command_part" >> $PERSISTENT_HISTORY_FILE
     export PERSISTENT_HISTORY_LAST="$command_part"
   fi
 }
@@ -22,8 +29,47 @@ run_on_prompt_command()
   log_bash_persistent_history
 }
 
+_ph_get_command()
+{
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    if ! [[ $1 =~ ^-?[0-9]+$ ]]; then
+      echo "Illegal non-integer argument."
+    else
+      command=`sed "$1!d" $PERSISTENT_HISTORY_FILE | awk -F "|" '{print $3}'`
+      echo $command
+    fi
+  fi
+}
+
+ph()
+{
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    command=$(_ph_get_command $1)
+    echo $command
+    eval $command
+  fi
+}
+
+phe()
+{
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    if ! [[ $1 =~ ^-?[0-9]+$ ]]; then
+      echo "Illegal non-integer argument."
+    else
+      command=`sed "$1!d" $PERSISTENT_HISTORY_FILE | awk -F "|" '{print $3}'`
+      echo $command
+    fi
+  fi
+}
+
 PROMPT_COMMAND="run_on_prompt_command"
-alias phgrep='cat ~/dot-files/.persistent_history|grep --color'
+alias phgrep='cat $PERSISTENT_HISTORY_FILE|grep --color -n'
 alias ag='ack-grep'
 alias k='fc -s'
 alias gchrome='google-chrome --high-dpi-support=1 --force-device-scale-factor=1 > /dev/null 2>&1 &'
@@ -32,3 +78,6 @@ bind "set show-all-if-ambiguous on"
 
 alias gpush='git push -u origin HEAD'
 alias gmaster='git checkout master && git pull'
+alias gamend='git commit --amend --no-edit'
+alias nt='nosetests -s --with-progressive '
+alias src='source ~/.bashrc'

@@ -1,4 +1,3 @@
-. ~/.virtualenvs/venv/bin/activate
 now_watch()
 {
     echo "Running $PERSISTENT_HISTORY_LAST"
