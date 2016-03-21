@@ -36,17 +36,18 @@ if [ $? != 0 ]; then
   tmux new-window -t $SESSIONNAME
   configure_tmux_window "agent-ui"
 
-  tmux new-window -t $SESSIONNAME
-  configure_tmux_window "embedded"
+  #tmux new-window -t $SESSIONNAME
+  #configure_tmux_window "embedded"
 
-  tmux new-window -t $SESSIONNAME
-  configure_tmux_window "client"
+  #tmux new-window -t $SESSIONNAME
+  #configure_tmux_window "client"
 
   tmux new-window -t $SESSIONNAME
   vagrant_ssh
   tmux send-keys -t $SESSIONNAME "cd ~/Projects/Angaza/payg-backend" C-m
   tmux split-window -t $SESSIONNAME -h
   vagrant_ssh
+  tmux send-keys -t $SESSIONNAME "cd ~/Projects/Angaza/payg-backend" C-m
   tmux rename-window  -t $SESSIONNAME "server"
 fi
 

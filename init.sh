@@ -62,6 +62,8 @@ if [ -n "$1" ]; then
                                       "$current_directory/.bashrc"
                                       "$current_directory/.tmux_min.conf"
                                       "$current_directory/.vimrc" )
+    git config --global user.name "Bill Finn"
+    git config --global alias.br "for-each-ref --sort=committerdate refs/heads/ --format='%(HEAD) %(color:yellow)%(refname:short)%(color:reset) - %(color:red)%(objectname:short)%(color:reset) - %(contents:subject) - %(authorname) (%(color:green)%(committerdate:relative)%(color:reset))'"
     ;;
     *)
     echo "Unknown argument $1."
@@ -101,6 +103,8 @@ for i in `seq 1 $num_files_to_edit`; do
     append_command_to_file $file "$cmd_to_append $second_file_argument_to_append"
   fi
 done
+
+append_command_to_file ~/.inputrc "set editing-mode vi"
 
 append_command_to_file ~/.zshrc "export PATH=$current_directory/bin/:\$PATH"
 append_command_to_file ~/.bashrc "export PATH=$current_directory/bin/:\$PATH"

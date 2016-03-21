@@ -16,6 +16,7 @@ Plugin 'scrooloose/syntastic'
 Plugin 'airblade/vim-gitgutter'
 Plugin 'tpope/vim-surround'
 Plugin 'bling/vim-airline'
+let g:airline#extensions#branch#displayed_head_limit = 10
 
 call vundle#end()            " required
 filetype plugin indent on    " required

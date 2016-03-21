@@ -64,9 +64,35 @@ phe()
   fi
 }
 
+alias nt='nosetests -s --with-progressive'
+
 PROMPT_COMMAND="run_on_prompt_command"
+#  \*(Ps = \*3\*0 \(-> Set foreground color to Black.
+#  \*(Ps = \*3\*1 \(-> Set foreground color to Red.
+#  \*(Ps = \*3\*2 \(-> Set foreground color to Green.
+#  \*(Ps = \*3\*3 \(-> Set foreground color to Yellow.
+#  \*(Ps = \*3\*4 \(-> Set foreground color to Blue.
+#  \*(Ps = \*3\*5 \(-> Set foreground color to Magenta.
+#  \*(Ps = \*3\*6 \(-> Set foreground color to Cyan.
+#  \*(Ps = \*3\*7 \(-> Set foreground color to White.
+#  \*(Ps = \*3\*9 \(-> Set foreground color to default (original).
+#  \*(Ps = \*4\*0 \(-> Set background color to Black.
+#  \*(Ps = \*4\*1 \(-> Set background color to Red.
+#  \*(Ps = \*4\*2 \(-> Set background color to Green.
+#  \*(Ps = \*4\*3 \(-> Set background color to Yellow.
+#  \*(Ps = \*4\*4 \(-> Set background color to Blue.
+#  \*(Ps = \*4\*5 \(-> Set background color to Magenta.
+#  \*(Ps = \*4\*6 \(-> Set background color to Cyan.
+#  \*(Ps = \*4\*7 \(-> Set background color to White.
+#  \*(Ps = \*4\*9 \(-> Set background color to default (original).
+
+if [[ $HOSTNAME == "vagrant"* ]]
+then
+  PS1="\[\033[37m\]\t\[\033[m\]-\[\033[36m\]\u\[\033[m\]@\[\033[32m\]\h:\[\033[33;1m\]\w\[\033[m\]\$ "
+fi
 alias phgrep='cat $PERSISTENT_HISTORY_FILE|grep --color -n'
 alias ag='ack-grep'
+alias agt='find . -name "*.py" -type f | xargs ls -tr1 | xargs ag '
 alias k='fc -s'
 alias gchrome='google-chrome --high-dpi-support=1 --force-device-scale-factor=1 > /dev/null 2>&1 &'
 bind "set completion-ignore-case on"
@@ -75,5 +101,18 @@ bind "set show-all-if-ambiguous on"
 alias gpush='git push -u origin HEAD'
 alias gmaster='git checkout master && git pull'
 alias gamend='git commit --amend --no-edit'
-alias nt='nosetests -s --with-progressive '
 alias src='source ~/.bashrc'
+alias pgrestoreprodsnapshot='dropdb za_prod_snapshot; createdb za_prod_snapshot && pg_restore --no-acl --no-owner -d za_prod_snapshot `ls -1t *.dump | head -n 1`'
+alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_snapshot'
+alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
+alias f8='flake8 --show-source --show-pep8 --config=flake8.ini za'
+alias vssh='vagrant ssh'
+alias api='export DATABASE_URI=postgres:///za_prod_snapshot; za-serve-gunicorn biz_api:/api'
+alias apidemo='export DATABASE_URI=postgres:///za_sandbox; za-serve-gunicorn biz_api:/api'
+
+# set PATH so it includes user's private bin if it exists
+if [ -d "$HOME/bin" ] ; then
+    PATH="$HOME/bin:$PATH"
+fi
+shopt -s autocd
+export CDPATH=.:~:~/Projects/Angaza

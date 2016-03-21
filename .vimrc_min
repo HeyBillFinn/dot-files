@@ -85,6 +85,9 @@ nnoremap Y "+y
 nnoremap ,p "+p
 nnoremap ,<c-v> :set paste!<cr>
 
+nnoremap n nzz
+nnoremap N Nzz
+
 " Move visual block
 vnoremap J :m '>+1<CR>gv=gv
 vnoremap K :m '<-2<CR>gv=gv
