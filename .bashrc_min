@@ -91,7 +91,7 @@ then
   PS1="\[\033[37m\]\t\[\033[m\]-\[\033[36m\]\u\[\033[m\]@\[\033[32m\]\h:\[\033[33;1m\]\w\[\033[m\]\$ "
 fi
 alias phgrep='cat $PERSISTENT_HISTORY_FILE|grep --color -n'
-alias ag='ack-grep'
+alias ag='ack-grep --ignore-dir dist'
 alias agt='find . -name "*.py" -type f | xargs ls -tr1 | xargs ag '
 alias k='fc -s'
 alias gchrome='google-chrome --high-dpi-support=1 --force-device-scale-factor=1 > /dev/null 2>&1 &'
@@ -100,10 +100,12 @@ bind "set show-all-if-ambiguous on"
 
 alias gpush='git push -u origin HEAD'
 alias gmaster='git checkout master && git pull'
+alias grebase='git checkout master && git pull && git checkout - && git rebase master'
 alias gamend='git commit --amend --no-edit'
 alias src='source ~/.bashrc'
 alias pgrestoreprodsnapshot='dropdb za_prod_snapshot; createdb za_prod_snapshot && pg_restore --no-acl --no-owner -d za_prod_snapshot `ls -1t *.dump | head -n 1`'
 alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_snapshot'
+alias proddb='export ZA_PROD_DATABASE_URI=`heroku config:get DATABASE_URL --app=angaza-production`'
 alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
 alias f8='flake8 --show-source --show-pep8 --config=flake8.ini za'
 alias vssh='vagrant ssh'

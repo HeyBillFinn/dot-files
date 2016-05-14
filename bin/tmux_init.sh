@@ -48,6 +48,14 @@ if [ $? != 0 ]; then
   tmux split-window -t $SESSIONNAME -h
   vagrant_ssh
   tmux send-keys -t $SESSIONNAME "cd ~/Projects/Angaza/payg-backend" C-m
+  tmux send-keys -t $SESSIONNAME "ngrok http -subdomain=za 80"
+  tmux split-window -t $SESSIONNAME
+  vagrant_ssh
+  tmux send-keys -t $SESSIONNAME "cd ~/Projects/Angaza/payg-backend" C-m
+  tmux select-pane -L -t $SESSIONNAME
+  tmux split-window -t $SESSIONNAME
+  vagrant_ssh
+  tmux send-keys -t $SESSIONNAME "cd ~/Projects/Angaza/payg-backend" C-m
   tmux rename-window  -t $SESSIONNAME "server"
 fi
 

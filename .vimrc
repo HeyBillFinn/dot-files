@@ -26,6 +26,7 @@ nnoremap ]r :GitGutterRevert<cr>
 
 nnoremap ,b :CtrlPBuffer<cr>
 nnoremap ,w :CtrlPCurWD<cr>
+nnoremap ,c :CtrlPClearCache<cr>
 let g:ctrlp_custom_ignore = {
   \   'dir': '\v[\/](dist|\.git|build)$',
   \   'file': '\v\.(exe|so|dll|class|apk|pyc|bin|dex|jar|png|prepreed.c|obfuscated.c|obfmap|o)$',
