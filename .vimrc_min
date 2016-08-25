@@ -31,6 +31,15 @@ nnoremap <silent> ,j :call WinMove('j')<cr>
 nnoremap ,= <c-w>=
 nnoremap ,o <c-w>o
 
+function! SelectTest()
+  normal ma[[w"cye`a
+  ?^    def test
+  normal w"tye`a
+  let @+ = @% . ':' . @c . '.' . @t
+endfunction
+
+nnoremap <silent> ,t :call SelectTest()<cr>
+
 nmap ,q <c-w>q
 
 nmap - O<esc>

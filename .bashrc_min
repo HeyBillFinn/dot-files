@@ -109,8 +109,15 @@ alias proddb='export ZA_PROD_DATABASE_URI=`heroku config:get DATABASE_URL --app=
 alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
 alias f8='flake8 --show-source --show-pep8 --config=flake8.ini za'
 alias vssh='vagrant ssh'
-alias api='export DATABASE_URI=postgres:///za_prod_snapshot; za-serve-gunicorn biz_api:/api'
-alias apidemo='export DATABASE_URI=postgres:///za_sandbox; za-serve-gunicorn biz_api:/api'
+alias api='DATABASE_URI=postgres:///za_prod_snapshot; za-serve-gunicorn biz_api:/api'
+alias apidemo='DATABASE_URI=postgres:///za_sandbox; za-serve-gunicorn biz_api:/api'
+alias celery='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
+alias celerydemo='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_sandbox celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
+alias utcdate='date -u +%Y%m%dT%H%M%SZ'
+alias isodate='date -u +%Y-%m-%dT%H:%M:%SZ'
+alias justdate='date +%Y-%m-%d'
+alias filenamedate='date +%Y-%m-%d_%H%M%SZ'
+export VIRTUAL_ENV_DISABLE_PROMPT=1
 
 # set PATH so it includes user's private bin if it exists
 if [ -d "$HOME/bin" ] ; then

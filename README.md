@@ -14,3 +14,7 @@ sudo apt-get install unity-tweak-tool gnome-tweak-tool
 sudo add-apt-repository ppa:shutter/ppa
 sudo apt-get update && sudo apt-get install shutter
 ```
+- Make `shutter` override built-in printscreen hotkeys using Compiz
+```
+sudo apt-get install compizconfig-settings-manager
+```

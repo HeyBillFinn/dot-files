@@ -53,10 +53,11 @@ if [ -n "$1" ]; then
     # Let's always activate our virtual env
     source ~/local/venv/bin/activate
     pip install watchdog
+    pip install nose-progressive
     mkdir -p ~/.config
     if [ ! -f ~/.config/flake8 ]; then
       echo "[flake8]" > ~/.config/flake8
-      echo "max-line-length = 80" > ~/.config/flake8
+      echo "max-line-length = 80" >> ~/.config/flake8
     fi
     second_file_arguments_to_append=( "$current_directory/.zshrc_min"
                                       "$current_directory/.bashrc"
@@ -64,6 +65,7 @@ if [ -n "$1" ]; then
                                       "$current_directory/.vimrc" )
     git config --global user.name "Bill Finn"
     git config --global alias.br "for-each-ref --sort=committerdate refs/heads/ --format='%(HEAD) %(color:yellow)%(refname:short)%(color:reset) - %(color:red)%(objectname:short)%(color:reset) - %(contents:subject) - %(authorname) (%(color:green)%(committerdate:relative)%(color:reset))'"
+    git config --global alias.ld "log --all --decorate"
     ;;
     *)
     echo "Unknown argument $1."
