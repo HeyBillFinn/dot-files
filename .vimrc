@@ -30,7 +30,7 @@ nnoremap ,b :CtrlPBuffer<cr>
 nnoremap ,w :CtrlPCurWD<cr>
 nnoremap ,c :CtrlPClearCache<cr>
 let g:ctrlp_custom_ignore = {
-  \   'dir': '\v[\/](dist|\.git|build)$',
+  \   'dir': '\v[\/](dist|\.git|build|node_modules)$',
   \   'file': '\v\.(exe|so|dll|class|apk|pyc|bin|dex|jar|png|prepreed.c|obfuscated.c|obfmap|o)$',
   \ }
 "Auto-open NerdTree for empty vim session
@@ -48,8 +48,11 @@ let g:syntastic_enable_signs = 0
 let g:syntastic_always_populate_loc_list = 1
 let g:syntastic_auto_loc_list = 1
 let g:syntastic_check_on_wq = 0
-let g:syntastic_javascript_checkers=["jscs"]
+let g:syntastic_javascript_checkers = ['eslint']
+" Allow Syntastic to find eslint
+"let $PATH .= getcwd() . '/node_modules/.bin'
+let $PATH .= ':/home/vagrant/local/node-linux-x64/bin'
 let g:syntastic_mode_map = {
       \ "mode": "passive",
-      \ "active_filetypes": [],
+      \ "active_filetypes": ['javascript'],
       \ "passive_filetypes": [] }

@@ -18,3 +18,15 @@ sudo apt-get update && sudo apt-get install shutter
 ```
 sudo apt-get install compizconfig-settings-manager
 ```
+- Make shared clipboard work.
+```
+sudo apt-get install xauth xsel
+```
+- Make iPython use vim key bindings
+```
+ipython profile create
+c.TerminalInteractiveShell.editing_mode = 'vi'
+
+# cf. http://stackoverflow.com/a/38329940
+```
+
