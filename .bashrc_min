@@ -103,21 +103,34 @@ alias gmaster='git checkout master && git pull'
 alias grebase='git checkout master && git pull && git checkout - && git rebase master'
 alias gamend='git commit --amend --no-edit'
 alias src='source ~/.bashrc'
+# Consider using --jobs or --single-transaction or setting the maintenance memory higher
 alias pgrestoreprodsnapshot='dropdb za_prod_snapshot; createdb za_prod_snapshot && pg_restore --no-acl --no-owner -d za_prod_snapshot `ls -1t *.dump | head -n 1`'
 alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_snapshot'
 alias proddb='export ZA_PROD_DATABASE_URI=`heroku config:get DATABASE_URL --app=angaza-production`'
 alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
 alias f8='flake8 --show-source --show-pep8 --config=flake8.ini za'
 alias vssh='vagrant ssh'
-alias api='DATABASE_URI=postgres:///za_prod_snapshot; za-serve-gunicorn biz_api:/api'
+alias api='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot za-serve-gunicorn biz_api:/api'
 alias apidemo='DATABASE_URI=postgres:///za_sandbox; za-serve-gunicorn biz_api:/api'
-alias celery='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
 alias celerydemo='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_sandbox celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
+alias celeryprodbeat='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za beat --loglevel=INFO'
+alias zapsqlsnapshot='za-psql -u bill@angazadesign.com -p asdfg postgres:///za_prod_snapshot'
+alias zs='za-psql -u bill@angazadesign.com -p asdfg postgres:///za_prod_snapshot -s '
 alias utcdate='date -u +%Y%m%dT%H%M%SZ'
 alias isodate='date -u +%Y-%m-%dT%H:%M:%SZ'
 alias justdate='date +%Y-%m-%d'
 alias filenamedate='date +%Y-%m-%d_%H%M%SZ'
+stty -ixon
 export VIRTUAL_ENV_DISABLE_PROMPT=1
+
+celeryprod()
+{
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 2>&1 | tee ~/celery_$1.log
+  fi
+}
 
 # set PATH so it includes user's private bin if it exists
 if [ -d "$HOME/bin" ] ; then
