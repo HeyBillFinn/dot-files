@@ -16,6 +16,8 @@ Plugin 'scrooloose/syntastic'
 Plugin 'airblade/vim-gitgutter'
 Plugin 'tpope/vim-surround'
 Plugin 'bling/vim-airline'
+Plugin 'godlygeek/tabular'
+Plugin 'plasticboy/vim-markdown'
 let g:airline#extensions#branch#displayed_head_limit = 10
 
 call vundle#end()            " required
