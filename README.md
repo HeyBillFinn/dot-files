@@ -18,7 +18,7 @@ sudo apt-get update && sudo apt-get install shutter
 ```
 sudo apt-get install compizconfig-settings-manager
 ```
-- Make shared clipboard work.
+- Make shared clipboard work from vagrant guest using lxc:
 ```
 sudo apt-get install xauth xsel
 ```
