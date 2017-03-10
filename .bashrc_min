@@ -105,9 +105,12 @@ alias gamend='git commit --amend --no-edit'
 alias src='source ~/.bashrc'
 # Consider using --jobs or --single-transaction or setting the maintenance memory higher
 alias pgrestoreprodsnapshot='dropdb za_prod_snapshot; createdb za_prod_snapshot && pg_restore --no-acl --no-owner -d za_prod_snapshot `ls -1t *.dump | head -n 1`'
+# alias pgrestoreschemaonly='dropdb za_prod_schema; createdb za_prod_schema && pg_restore --schema-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1` && pg_restore --table=alembic_version --data-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1`'
 alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_snapshot'
 alias proddb='export ZA_PROD_DATABASE_URI=`heroku config:get DATABASE_URL --app=angaza-production`'
-alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
+#alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
+alias sshprod='ec2-ssh `fab group_list_all:production | grep "^production__biz" | awk "{print $1}"`'
+alias scpprod='ec2-host `fab group_list_all:production | grep "^production__biz" | awk "{print $1}"`'
 alias f8='flake8 --show-source --show-pep8 --config=flake8.ini za'
 alias vssh='vagrant ssh'
 alias api='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot za-serve-gunicorn biz_api:/api'
@@ -128,6 +131,7 @@ celeryprod()
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
   else
+    echo "rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 2>&1 | tee ~/celery_$1.log"
     rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 2>&1 | tee ~/celery_$1.log
   fi
 }

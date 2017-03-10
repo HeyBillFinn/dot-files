@@ -15,7 +15,7 @@ Plugin 'vimwiki/vimwiki'
 Plugin 'scrooloose/syntastic'
 Plugin 'airblade/vim-gitgutter'
 Plugin 'tpope/vim-surround'
-Plugin 'bling/vim-airline'
+"Plugin 'bling/vim-airline'
 Plugin 'godlygeek/tabular'
 Plugin 'plasticboy/vim-markdown'
 let g:airline#extensions#branch#displayed_head_limit = 10
@@ -50,7 +50,7 @@ let g:syntastic_auto_loc_list = 1
 let g:syntastic_check_on_wq = 0
 let g:syntastic_javascript_checkers = ['eslint']
 " Allow Syntastic to find eslint
-"let $PATH .= getcwd() . '/node_modules/.bin'
+let $PATH .= ':' . getcwd() . '/node_modules/.bin'
 let $PATH .= ':/home/vagrant/local/node-linux-x64/bin'
 let g:syntastic_mode_map = {
       \ "mode": "passive",
