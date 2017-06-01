@@ -54,5 +54,5 @@ let $PATH .= ':' . getcwd() . '/node_modules/.bin'
 let $PATH .= ':/home/vagrant/local/node-linux-x64/bin'
 let g:syntastic_mode_map = {
       \ "mode": "passive",
-      \ "active_filetypes": ['javascript'],
+      \ "active_filetypes": [],
       \ "passive_filetypes": [] }

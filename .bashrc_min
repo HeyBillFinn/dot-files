@@ -91,7 +91,7 @@ then
   PS1="\[\033[37m\]\t\[\033[m\]-\[\033[36m\]\u\[\033[m\]@\[\033[32m\]\h:\[\033[33;1m\]\w\[\033[m\]\$ "
 fi
 alias phgrep='cat $PERSISTENT_HISTORY_FILE|grep --color -n'
-alias ag='ack-grep --ignore-dir dist'
+alias ag='ack-grep --ignore-dir dist --ignore-file=ext:patch'
 alias agt='find . -name "*.py" -type f | xargs ls -tr1 | xargs ag '
 alias k='fc -s'
 alias gchrome='google-chrome --high-dpi-support=1 --force-device-scale-factor=1 > /dev/null 2>&1 &'
@@ -104,7 +104,7 @@ alias grebase='git checkout master && git pull && git checkout - && git rebase m
 alias gamend='git commit --amend --no-edit'
 alias src='source ~/.bashrc'
 # Consider using --jobs or --single-transaction or setting the maintenance memory higher
-alias pgrestoreprodsnapshot='dropdb za_prod_snapshot; createdb za_prod_snapshot && pg_restore --no-acl --no-owner -d za_prod_snapshot `ls -1t *.dump | head -n 1`'
+alias pgrestoreprodsnapshot='dropdb za_prod_snapshot; createdb za_prod_snapshot && echo "restoring" && pg_restore --no-acl --no-owner -d za_prod_snapshot `ls -1t *.dump | head -n 1`'
 # alias pgrestoreschemaonly='dropdb za_prod_schema; createdb za_prod_schema && pg_restore --schema-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1` && pg_restore --table=alembic_version --data-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1`'
 alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_snapshot'
 alias proddb='export ZA_PROD_DATABASE_URI=`heroku config:get DATABASE_URL --app=angaza-production`'
@@ -131,7 +131,7 @@ celeryprod()
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
   else
-    echo "rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 2>&1 | tee ~/celery_$1.log"
+    echo "rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 -Ofair 2>&1 | tee ~/celery_$1.log"
     rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 2>&1 | tee ~/celery_$1.log
   fi
 }
