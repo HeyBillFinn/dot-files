@@ -64,6 +64,11 @@ phe()
   fi
 }
 
+gitmv()
+{
+  git grep -l $1 | xargs sed -i "s/$1/$2/g"
+}
+
 alias nt='nosetests -s --with-progressive'
 
 PROMPT_COMMAND="run_on_prompt_command"
@@ -119,6 +124,8 @@ alias celerydemo='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/va
 alias celeryprodbeat='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za beat --loglevel=INFO'
 alias zapsqlsnapshot='za-psql -u bill@angazadesign.com -p asdfg postgres:///za_prod_snapshot'
 alias zs='za-psql -u bill@angazadesign.com -p asdfg postgres:///za_prod_snapshot -s '
+alias orgs='psql -d za_prod_snapshot -c "select id,name from organizations"'
+alias users='psql -d za_prod_snapshot -c "select u.id,username,o.name from users u inner join organizations o on u.organization_id=o.id"'
 alias utcdate='date -u +%Y%m%dT%H%M%SZ'
 alias isodate='date -u +%Y-%m-%dT%H:%M:%SZ'
 alias justdate='date +%Y-%m-%d'
@@ -142,3 +149,11 @@ if [ -d "$HOME/bin" ] ; then
 fi
 shopt -s autocd
 export CDPATH=.:~:~/Projects/Angaza
+
+bfhelp()
+{
+  cat << EOF
+envdir variables/ za-psql -u bill@angazadesign.com \`cat ~/variables/DATABASE_URI\`
+select "time",duration,culprit from sql_queries where "time" > '2017-06-21 14:19:11'::timestamp and "time" < '2017-06-21 14:19:23' and process = 2088 order by 1;
+EOF
+}
