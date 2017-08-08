@@ -4,6 +4,8 @@ filetype off                   " required!
 
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
+"Plugin 'Vimjas/vim-python-pep8-indent'
+Plugin 'FooSoft/vim-argwrap'
 Plugin 'VundleVim/Vundle.vim'
 Plugin 'scrooloose/nerdtree'
 Plugin 'kien/ctrlp.vim'
@@ -35,6 +37,8 @@ let g:ctrlp_custom_ignore = {
   \ }
 "Auto-open NerdTree for empty vim session
 "autocmd vimenter * if !argc() | NERDTree | endif
+nnoremap ,a :ArgWrap<CR>
+let g:argwrap_wrap_closing_brace = 0
 nnoremap ,n :NERDTreeToggle<CR>
 nnoremap ,f :NERDTreeFocus<CR>
 let NERDTreeIgnore = ['\.pyc$']
