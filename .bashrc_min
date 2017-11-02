@@ -69,6 +69,29 @@ gitmv()
   git grep -l $1 | xargs sed -i "s/$1/$2/g"
 }
 
+gitpushtmp()
+{
+  branchName=$(git rev-parse --abbrev-ref HEAD)
+  if ! [[ $branchName =~ ^dev.*$ ]]; then
+    echo "error: not on dev branch"
+    return 1
+  fi
+  tmpBranchName=$(echo $branchName | sed 's/^dev/tmp/')
+  branchExists=$(git rev-parse --verify $tmpBranchName 2>/dev/null)
+  if [[ -z $branchExists ]]; then
+    echo "branch $tmpBranchName doesn't exist; creating"
+    git branch $tmpBranchName
+  fi
+  echo "updating $tmpBranchName to $branchName"
+  git branch -f $tmpBranchName $branchName
+  echo "force pushing $tmpBranchName"
+  if ! [[ $tmpBranchName =~ ^tmp.*$ ]]; then
+    echo "error: tmp branch incorrectly formatted"
+    return 1
+  fi
+  git push -u origin $tmpBranchName -f
+}
+
 alias nt='nosetests -s --with-progressive'
 
 PROMPT_COMMAND="run_on_prompt_command"
@@ -109,9 +132,9 @@ alias grebase='git checkout master && git pull && git checkout - && git rebase m
 alias gamend='git commit --amend --no-edit'
 alias src='source ~/.bashrc'
 # Consider using --jobs or --single-transaction or setting the maintenance memory higher
-alias pgrestoreprodsnapshot='dropdb za_prod_snapshot; createdb za_prod_snapshot && echo "restoring" && pg_restore --no-acl --no-owner -d za_prod_snapshot `ls -1t *.dump | head -n 1`'
+alias pgrestoreprodsnapshot='dropdb za_prod_pristine; createdb za_prod_pristine && echo "restoring" && pg_restore --no-acl --no-owner -d za_prod_pristine `ls -1t *.dump | head -n 1`'
 # alias pgrestoreschemaonly='dropdb za_prod_schema; createdb za_prod_schema && pg_restore --schema-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1` && pg_restore --table=alembic_version --data-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1`'
-alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_snapshot'
+alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_pristine'
 alias proddb='export ZA_PROD_DATABASE_URI=`heroku config:get DATABASE_URL --app=angaza-production`'
 #alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
 alias sshprod='ec2-ssh `fab group_list_all:production | grep "^production__biz" | awk "{print $1}"`'
@@ -125,6 +148,7 @@ alias celeryprodbeat='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_
 alias zapsqlsnapshot='za-psql -u bill@angazadesign.com -p asdfg postgres:///za_prod_snapshot'
 alias zapsqlprod='za-psql -u bill@angazadesign.com -p asdfg `heroku config:get DATABASE_URL --app=angaza-production`'
 alias zs='za-psql -u bill@angazadesign.com -p asdfg postgres:///za_prod_snapshot -s '
+alias groups='psql -d za_prod_snapshot -c "select id,name from groups"'
 alias orgs='psql -d za_prod_snapshot -c "select id,name from organizations"'
 alias users='psql -d za_prod_snapshot -c "select u.id,username,o.name,r.name,u.archived from users u inner join organizations o on u.organization_id=o.id inner join roles r on u.role_id=r.id"'
 alias utcdate='date -u +%Y%m%dT%H%M%SZ'
@@ -135,13 +159,23 @@ alias fabwheelupload='fab wheelhouse_upload:`ls -m ~/Projects/Angaza/payg-backen
 stty -ixon
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 
+prodfork()
+{
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    export ZA_PROD_FORK=`heroku config:get $1 --app=angaza-production`
+    echo "ZA_PROD_FORK=$ZA_PROD_FORK"
+  fi
+}
+
 celeryprod()
 {
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
   else
-    echo "rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 -Ofair 2>&1 | tee ~/celery_$1.log"
-    rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 2>&1 | tee ~/celery_$1.log
+    echo "rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1 -Ofair 2>&1"
+    rabbitmqadmin purge queue name=$1; celery purge -f && ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za worker --hostname=$1 --loglevel=INFO --concurrency=1 --queues=$1
   fi
 }
 
@@ -152,10 +186,19 @@ fi
 shopt -s autocd
 export CDPATH=.:~:~/Projects/Angaza
 
+unregistered_unit()
+{
+  psql -d za_prod_snapshot -c "select default_account_number from units u left outer join accounts a on a.attached_unit_id=u.id where u.type='$1' and a.id is null order by u.id desc limit 5"
+}
 zabill()
 {
   cat << EOF
 envdir variables/ za-psql -u bill@angazadesign.com \`cat ~/variables/DATABASE_URI\`
+
+select pid,client_addr,client_port,query_start,substr(query, 20),state from pg_stat_activity where state != 'idle' order by query_start;
+
+select pid,application_name,client_addr,client_port,query_start,substr(query, 1, 50),state from pg_stat_activity where state != 'idle' order by query_start;
+
 select "time",duration,culprit from sql_queries where "time" > '2017-06-21 14:19:11'::timestamp and "time" < '2017-06-21 14:19:23' and process = 2088 order by 1;
 
 from multiprocessing import Pool
@@ -166,6 +209,20 @@ def f(x):
 
 p = Pool(5)
 print(p.map(f, ["production__biz-20170804224549", "production__biz-20170808040138"]))
+
+# Convert fields to autovalue
+%s/final/abstract
+%s/;/();/
+
+# Convert auto-value functions to builder
+%s/public abstract \(\S*\) \(\S*\)();/public abstract Builder \2\(\1 \2);
+g/Nullable/d
+g/SerializedName/d
+
+sqlite3 /data/data/com.angazadesign.agent/databases/za-lite.db
+
+
+select generated_at,json_extract_path_text(regexp_replace(message, '.*telemetry report; '), 'events-sms-low-prio') from system_log_lines where message like '%telemetry report;%' and generated_at > sysdate - '7 days'::interval order by 1;
 
 EOF
 }
