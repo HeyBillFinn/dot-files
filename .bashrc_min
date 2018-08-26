@@ -10,7 +10,8 @@ log_bash_persistent_history()
   $(history 1) =~ ^\ *[0-9]+\ +([^\ ]+\ [^\ ]+)\ +(.*)$
   ]]
   local date_part="${BASH_REMATCH[1]}"
-  local command_part="${BASH_REMATCH[2]}"
+  # Replace newlines with blank space and trim trailing spaces
+  local command_part=$(echo "${BASH_REMATCH[2]}" | tr '\n' ' ' | sed -e 's/[[:space:]]*$//')
   if [ "$command_part" != "$PERSISTENT_HISTORY_LAST" ] && \
     [[ $command_part != "phgrep "* ]]
   then
@@ -64,6 +65,16 @@ phe()
     echo $command
   fi
 }
+
+__fzf_persistent_history__() (
+  local cmd
+  # XXX: Currently requires `vipe` and `sponge` of `moreutils`.
+  tac $PERSISTENT_HISTORY_FILE | \
+    fzf --tiebreak=index -d '\|' -n '4..' \
+    --bind 'enter:execute(export FZF_CMD=$(echo {} | awk -F "|" '"'"'{print $4}'"'"'); echo "$FZF_CMD")+abort,ctrl-v:execute(export FZF_CMD=$(echo {} | awk -F "|" '"'"'{print $4}'"'"'); echo $FZF_CMD | vipe)+abort,ctrl-d:execute(export FIRST_THREE_COLS=$(echo {} | cut -d "|" -f1-3); export OUT_FILENAME=$(echo ~/dot-files/$(date -u -Iseconds)_bkp.persistent_history); cp ~/dot-files/.persistent_history $OUT_FILENAME && grep -v -a -F "$FIRST_THREE_COLS" ~/dot-files/.persistent_history | sponge ~/dot-files/.persistent_history)+abort'
+)
+# Heavily inspired from ~/.fzf/shell/key-bindings.bash
+bind '"\C-p": "\C-x\C-addi`__fzf_persistent_history__`\C-x\C-e\C-x\C-r\C-x^\C-x\C-a$a\n"'
 
 gitmv()
 {
