@@ -29,4 +29,12 @@ c.TerminalInteractiveShell.editing_mode = 'vi'
 
 # cf. http://stackoverflow.com/a/38329940
 ```
+- Ubuntu color picker
 
+```
+sudo apt-get install gpick
+```
+
+- `fzf` -- fuzzy `ctrl-R` (and more) in terminal:
+
+https://github.com/junegunn/fz://github.com/junegunn/fzf
