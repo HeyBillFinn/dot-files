@@ -20,13 +20,18 @@ Plugin 'tpope/vim-surround'
 "Plugin 'bling/vim-airline'
 Plugin 'godlygeek/tabular'
 Plugin 'plasticboy/vim-markdown'
+Plugin 'mgedmin/pythonhelper'
+Plugin 'solars/github-vim'
+Plugin 'w0rp/ale'
 let g:airline#extensions#branch#displayed_head_limit = 10
 
 call vundle#end()            " required
 filetype plugin indent on    " required
 
 nnoremap ]p :GitGutterPreview<cr>
-nnoremap ]r :GitGutterRevert<cr>
+nnoremap ]r :GitGutterUndoHunk<cr>
+" Help gitgutter refresh faster
+set updatetime=500
 
 nnoremap ,b :CtrlPBuffer<cr>
 nnoremap ,w :CtrlPCurWD<cr>
@@ -37,15 +42,29 @@ let g:ctrlp_custom_ignore = {
   \ }
 "Auto-open NerdTree for empty vim session
 "autocmd vimenter * if !argc() | NERDTree | endif
+
+augroup ALEProgress
+  autocmd!
+  autocmd User ALEFixPre  hi Statusline ctermbg=darkgrey
+  autocmd User ALEFixPost hi Statusline ctermbg=white
+augroup end
+
 nnoremap ,a :ArgWrap<CR>
-let g:argwrap_wrap_closing_brace = 0
+" let g:argwrap_wrap_closing_brace = 0
 nnoremap ,n :NERDTreeToggle<CR>
 nnoremap ,f :NERDTreeFocus<CR>
 let NERDTreeIgnore = ['\.pyc$']
 au FileType gitcommit set tw=72
+nnoremap <F6> :SyntasticReset<cr>
 nnoremap <F7> :SyntasticCheck<cr>:ll<cr>
-nnoremap <F9> :lnext<cr>
-nnoremap <F8> :lprevious<cr>
+" nnoremap <F9> :lnext<cr>
+" nnoremap <F8> :lprevious<cr>
+nmap <F5> <Plug>(ale_fix)
+nmap <F8> <Plug>(ale_previous_wrap)
+nmap <F9> <Plug>(ale_next_wrap)
+
+let g:ale_python_black_executable = '/home/vagrant/local/venv36/bin/black'
+let g:ale_fixers = { '*': ['remove_trailing_lines'], 'python': ['black'] }
 
 let g:syntastic_enable_highlighting = 0
 let g:syntastic_enable_signs = 0
@@ -60,3 +79,4 @@ let g:syntastic_mode_map = {
       \ "mode": "passive",
       \ "active_filetypes": [],
       \ "passive_filetypes": [] }
+set statusline=%<%f\ %h%m%r\ %1*%{TagInStatusLine()}%*%=%-14.(%l,%c%V%)\ %P
