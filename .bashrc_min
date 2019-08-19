@@ -74,11 +74,15 @@ __fzf_persistent_history__() (
     --bind 'enter:execute(export FZF_CMD=$(echo {} | awk -F "|" '"'"'{print $4}'"'"'); echo "$FZF_CMD")+abort,ctrl-v:execute(export FZF_CMD=$(echo {} | awk -F "|" '"'"'{print $4}'"'"'); echo $FZF_CMD | vipe)+abort,ctrl-d:execute(export FIRST_THREE_COLS=$(echo {} | cut -d "|" -f1-3); export OUT_FILENAME=$(echo ~/dot-files/$(date -u -Iseconds)_bkp.persistent_history); cp ~/dot-files/.persistent_history $OUT_FILENAME && grep -v -a -F "$FIRST_THREE_COLS" ~/dot-files/.persistent_history | sponge ~/dot-files/.persistent_history)+abort'
 )
 # Heavily inspired from ~/.fzf/shell/key-bindings.bash
+bind '"\C-x\C-a": vi-movement-mode'
+bind '"\C-x\C-e": shell-expand-line'
+bind '"\C-x\C-r": redraw-current-line'
+bind '"\C-x^": history-expand-line'
 bind '"\C-p": "\C-x\C-addi`__fzf_persistent_history__`\C-x\C-e\C-x\C-r\C-x^\C-x\C-a$a\n"'
 
 gitmv()
 {
-  git grep -l $1 | xargs sed -i "s/$1/$2/g"
+  git grep -l "$1" | xargs sed -i "s/$1/$2/g"
 }
 
 gitfixup()
@@ -136,63 +140,72 @@ if [[ $HOSTNAME == "vagrant"* ]]
 then
   PS1="\[\033[37m\]\t\[\033[m\]-\[\033[36m\]\u\[\033[m\]@\[\033[32m\]\h:\[\033[33;1m\]\w\[\033[m\]\$ "
 fi
+alias disablebracketedpaste='printf "\e[?2004l"'
 alias phgrep='cat $PERSISTENT_HISTORY_FILE|grep --color -n -a'
 alias ag='ack-grep --ignore-dir dist --ignore-file=ext:patch'
 alias agt='find . -name "*.py" -type f | xargs ls -tr1 | xargs ag '
 alias k='fc -s'
-alias gchrome='google-chrome --high-dpi-support=1 --force-device-scale-factor=1 > /dev/null 2>&1 &'
 bind "set completion-ignore-case on"
 bind "set show-all-if-ambiguous on"
 
+alias gdm='git diff master...HEAD'
+alias glm='git log -p master...HEAD'
 alias gg='git grep -n '
 alias gpush='git push -u origin HEAD'
-alias gmaster='git checkout master && git pull'
-alias grebase='git checkout master && git pull && git checkout - && git rebase master'
+alias grebase='gmaster && git checkout - && git rebase master'
 alias gamend='git commit --amend --no-edit'
 alias gm='git checkout master'
 alias gfa='git fetch --all'
 alias gmr='git merge --ff-only @{u}'
+alias gmaster='git checkout master && git fetch --all && git merge --ff-only @{u}'
 alias src='source ~/.bashrc'
-# Consider using --jobs or --single-transaction or setting the maintenance memory higher
-alias pgrestoreprodsnapshot='dropdb za_prod_pristine; createdb za_prod_pristine && echo "restoring" && pg_restore --no-acl --no-owner -d za_prod_pristine `ls -1t *.dump | head -n 1`'
-# alias pgrestoreschemaonly='dropdb za_prod_schema; createdb za_prod_schema && pg_restore --schema-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1` && pg_restore --table=alembic_version --data-only --no-acl --no-owner -d za_prod_schema `ls -1t *.dump | head -n 1`'
 alias alembicc='alembic -c ~/Projects/Angaza/alembic.ini '
 alias alembichistory='alembicc history | less'
 alias alembichead='alembicc upgrade head'
-alias prodsnapshot='fab world_db_snapshot:production,restore_to=za_prod_pristine'
-alias proddb='export ZA_PROD_DATABASE_URI=`heroku config:get DATABASE_URL --app=angaza-production`'
-alias followerdb='export ZA_FOLLOWER_DATABASE_URL=`heroku config:get HEROKU_POSTGRESQL_BLACK_URL --app=angaza-production`'
+alias sandboxdemodb='export ZA_SANDBOX_DEMO_DATABASE_URI=`envdir ~/Projects/Angaza/variables.aws summon -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e sandbox -D ENV=sandbox-demo printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
+alias proddb='export ZA_PROD_DATABASE_URI=`cd payg-deploy > /dev/null && summon -e PRODUCTION printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
+alias analyticsdb='export ZA_ANALYTICS_DATABASE_URL=`envdir ~/Projects/Angaza/variables.aws summon -f ~/Projects/Angaza/payg-backend/buildkite/periodic-tasks/check-follower-lag-secrets.yml printenv | grep "^ANALYTICS_FOLLOWER_DATABASE_URL=" | cut -d "=" -f 2`'
+alias exportdb='export ZA_EXPORT_DATABASE_URL=`envdir ~/Projects/Angaza/variables.aws summon -f ~/Projects/Angaza/payg-backend/buildkite/periodic-tasks/check-follower-lag-secrets.yml printenv | grep "^EXPORTS_FOLLOWER_DATABASE_URL=" | cut -d "=" -f 2`'
+alias followerdb='export ZA_FOLLOWER_DATABASE_URL=`cd payg-deploy > /dev/null && summon -e follower printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
+alias heybillfinndb='export ZA_HEYBILLFINN_FORK_URL=`cd payg-deploy > /dev/null && summon -f ~/Projects/Angaza/payg-deploy/secrets.yml -e heroku_admin heroku config --app angaza-production | grep HEYBILLFINN | awk '"'"'{print $2}'"'"'`'
 alias ec2instances='export ZA_EC2_INSTANCES=`ec2-host`'
-alias billinstance='export ZA_BILL_INSTANCE=`ec2-host | grep billfinn | sed "s/\(.*\)\s\+\(.*\)/\2/g"`'
+alias ensure_bill='export ZA_BILL_INSTANCE=`cd payg-deploy > /dev/null && fab group_list_all:production,deploy | grep billfinn | cut -d " " -f 1`'
 alias bizinstance='export ZA_BIZ_INSTANCE=`ec2-host | grep production__biz- | sed "s/\(.*\)\s\+\(.*\)/\2/g"`'
 #alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
 alias sshprod='ec2-ssh `fab group_list_all:production | grep "^production__biz" | awk "{print $1}"`'
-alias scpprod='ec2-host `fab group_list_all:production | grep "^production__biz" | awk "{print $1}"`'
-alias alembicbranchpoint='AL_HISTORY=`alembic history` && AL_BR_REVISION=`echo "$AL_HISTORY" | grep "(branchpoint)" | awk '"'"'{print $2}'"'"'` && echo "branchpoint: $AL_BR_REVISION" && echo "$AL_HISTORY" | grep -C 1 "^Parent: $AL_BR_REVISION\|(head)"'
+alias alembicbranchpoint='AL_HISTORY=`alembic history` && AL_BR_REVISION=`echo "$AL_HISTORY" | grep "(branchpoint)" | awk '"'"'{print $3}'"'"'` && echo "branchpoint: $AL_BR_REVISION" && echo "$AL_HISTORY" | grep -C 1 "^$AL_BR_REVISION\|(head)"'
 alias f8='flake8 --show-source --config=flake8.ini za'
 alias vssh='vagrant ssh'
-alias api='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot za-serve-gunicorn biz_api:/api'
-alias apidemo='DATABASE_URI=postgres:///za_sandbox; za-serve-gunicorn biz_api:/api'
 alias celerydemo='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_sandbox celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
 alias celeryprodbeat='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za beat --loglevel=INFO'
 alias countries='python -c "from babel import Locale; l = Locale('"'"'en'"'"', '"'"'US'"'"'); print((u'"'"'\n'"'"'.join([u'"'"'{}:{}'"'"'.format(k, v) for (k, v) in l.territories.iteritems()])).encode('"'"'utf-8'"'"'))" | sort | less'
 alias utcdate='date -u +%Y%m%dT%H%M%SZ'
+alias utcclip='date -u +%Y%m%d | tr -d "\n" | xsel --clipboard'
 alias isodate='date -u +%Y-%m-%dT%H:%M:%SZ'
 alias justdate='date +%Y-%m-%d'
 alias filenamedate='date +%Y-%m-%d_%H%M%SZ'
 alias fabwheelupload='fab wheelhouse_upload:`ls -m ~/Projects/Angaza/payg-backend/*.whl | tr -d " " | tr -d "\n"`'
+alias ec2host='envdir ~/Projects/Angaza/variables.aws ec2-host'
+alias listgroups='cd ~/Projects/Angaza/payg-deploy && fab group_list_all:production'
+alias demoserve='envdir ../variables.aws/ envdir ../variables.demo/ za-serve-gunicorn za.blueprints.admin:/raw za.blueprints.biz_api_internal:/api --workers 2'
+alias zapsqldemo='DATABASE_URI="postgres:///za_demo" envdir ../variables.aws/ za-psql -u system@angaza.com'
+alias followerserve='ensure_follower && DATABASE_URI=$ZA_FOLLOWER_DATABASE_URL za-serve-gunicorn za.blueprints.biz_api_internal:/api --workers 2 --timeout 120'
+watchdb()
+{
+  watch $'psql -c "select pid,client_addr,client_port as port,substr(query_start::varchar, 1, 18),substr(query, 1, 50),substr(state, 1, 7),substr((now()-query_start)::varchar, 1, 8) as duration from pg_stat_activity where state != \'idle\' order by query_start;" '"$1"' '
+}
+watchprod()
+{
+  ensure_production
+  watch $'psql -c "select pid,client_addr,client_port as port,substr(query_start::varchar, 1, 18),substr(query, 1, 50),substr(state, 1, 7),substr((now()-query_start)::varchar, 1, 8) as duration from pg_stat_activity where state != \'idle\' order by query_start;" $ZA_PROD_DATABASE_URI '
+}
+watchprodnarrow()
+{
+  ensure_production
+  watch $'psql -c "select pid,client_addr,substr(query, 1, 50),substr((now()-query_start)::varchar, 1, 8) as duration from pg_stat_activity where state != \'idle\' order by query_start;" $ZA_PROD_DATABASE_URI '
+}
 stty -ixon
 export VIRTUAL_ENV_DISABLE_PROMPT=1
-
-prodfork()
-{
-  if [ "$#" -ne 1 ]; then
-    echo "Illegal number of parameters"
-  else
-    export ZA_PROD_FORK=`heroku config:get $1 --app=angaza-production`
-    echo "ZA_PROD_FORK=$ZA_PROD_FORK"
-  fi
-}
 
 celeryprod()
 {
@@ -218,14 +231,14 @@ unregistered_unit()
 sshbill()
 {
   if [[ -z "${ZA_BILL_INSTANCE}" ]]; then
-    billinstance
+    ensure_bill
   fi
-  ssh -A ubuntu@$ZA_BILL_INSTANCE
+  ec2-ssh -A $ZA_BILL_INSTANCE
 }
 scpbill()
 {
   if [[ -z "${ZA_BILL_INSTANCE}" ]]; then
-    billinstance
+    ensure_bill
   fi
   scp $1 ubuntu@$ZA_BILL_INSTANCE:
 }
@@ -234,10 +247,42 @@ safekill()
   pgrep -a $1
   killall -i $1
 }
+ensure_sandbox_demo()
+{
+  if [[ -z "${ZA_SANDBOX_DEMO_DATABASE_URI}" ]]; then
+    sandboxdemodb
+  fi
+}
+ensure_production()
+{
+  if [[ -z "${ZA_PROD_DATABASE_URI}" ]]; then
+    proddb
+  fi
+}
 ensure_follower()
 {
   if [[ -z "${ZA_FOLLOWER_DATABASE_URL}" ]]; then
     followerdb
+  fi
+}
+sql_statements()
+{
+  TRACE_ID="$1"
+  CWD="$PWD"
+  pushd ~/Projects/Angaza/payg-deploy
+  envdir ~/Projects/Angaza/variables.deploy summon -e redshift psql -c 'select ''"time",duration,culprit,statement,parameters from sql_queries where trace_id='"'""$TRACE_ID""'" > "$CWD/$TRACE_ID.txt"
+  popd
+}
+ensure_puce()
+{
+  if [[ -z "${ZA_PUCE_DATABASE_URL}" ]]; then
+    export ZA_PUCE_DATABASE_URL=`cd payg-deploy > /dev/null && summon -e heroku_admin heroku config:get HEROKU_POSTGRESQL_PUCE_URL --app angaza-production`
+  fi
+}
+ensure_heybillfinndb()
+{
+  if [[ -z "${ZA_HEYBILLFINN_FORK_URL}" ]]; then
+    heybillfinndb
   fi
 }
 with_follower()
@@ -247,7 +292,7 @@ with_follower()
 }
 orgs()
 {
-  with_follower "select id,name,default_operating_country,sms_sender_text,preferred_sms_router_id as router_id from organizations $* order by name"
+  with_follower "select o.id,name,default_operating_country,sms_sender_text,preferred_sms_router_id as router_id, aav.version_code as app_version from organizations o inner join agent_app_versions aav on o.agent_app_version_id=aav.id $* order by name"
 }
 products()
 {
@@ -259,11 +304,11 @@ agent_app_versions()
 }
 org_rels()
 {
-  with_follower "select p.name as parent, c.name as child from organization_organization_associations ooa inner join organizations p on ooa.parent_organization_id=p.id inner join organizations c on ooa.child_organization_id=c.id where p.name != 'Angaza' order by p.name,c.name"
+  with_follower "select p.name as parent, p.id as p_id, c.name as child, c.id as c_id from organization_organization_associations ooa inner join organizations p on ooa.parent_organization_id=p.id inner join organizations c on ooa.child_organization_id=c.id where p.name != 'Angaza' order by p.name,c.name"
 }
 users()
 {
-  with_follower "select u.id,u.created_when,username,o.name,substr(r.name, 1, 10),u.archived from users u inner join organizations o on u.organization_id=o.id inner join roles r on u.role_id=r.id order by username"
+  with_follower "select u.id,u.created_when,username,o.name,substr(r.name, 1, 10),u.archived as ar,u.interface_locale as locale  from users u inner join organizations o on u.organization_id=o.id inner join roles r on u.role_id=r.id order by username"
 }
 roles()
 {
@@ -281,13 +326,27 @@ portals()
 {
   with_follower "select o.name,o.id as org_id,p.id as portal_id,p.type,p.is_enabled,p.is_visible,p.reference_validation,p.remittance_detector,p.merchant_account from portals p inner join organizations o on p.organization_id=o.id order by o.name"
 }
-export_configs()
+export_targets()
 {
-  with_follower "select ec.id,ec.created_when,ec.frequency,o.name,et.type,et.db_url,et.schema from export_configs ec inner join organizations o on ec.organization_id=o.id inner join export_targets et on ec.export_target_base_id=et.id order by ec.id"
+  with_follower "select et.id,et.type,o.name,etd.db_url,etd.schema,eth.* from export_targets et left outer join export_targets_http eth on et.id=eth.id left outer join export_targets_bigquery etb on et.id=etb.id left outer join export_targets_database etd on et.id=etd.id left outer join organizations o on exists(select 1 from export_report_configs erc where erc.export_target_id=et.id and erc.organization_id=o.id) order by et.id"
+}
+export_report_statuses()
+{
+  with_follower "select substr(ers.scheduled_when::varchar, 1, 16) as sched,substr(ers.started_when::varchar, 1, 16) as started,substring(ers.completed_when::varchar, 1, 16) as completed,ers.state,ers.size,erc.report_config_type,substr(erc.incremental_updated_when::varchar, 1, 16) as incr,erc.frequency,et.type, erc.organization_id as org_id from export_report_statuses ers inner join export_report_configs erc on ers.export_report_config_id=erc.id inner join export_targets et on erc.export_target_id=et.id where ers.scheduled_when > now() - '3 days'::interval order by ers.scheduled_when desc;"
+}
+export_report_configs()
+{
+  # with_follower "select erc.id,substr(erc.created_when::varchar, 1, 16) as created_when,substr(erc.frequency, 1, 10) as freq,substr(o.name, 1, 30) as org_name,erc.id,erc.report_config_type,et.type,erc.is_enabled as e,substr(erc.incremental_updated_when::varchar, 1, 10) as when,erc.table_reporter_kwargs,erc.db_kwargs,erc.report_kwargs from export_report_configs erc inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id order by o.name"
+  with_follower "select erc.id,substr(erc.created_when::varchar, 1, 10) as created,substr(erc.frequency, 1, 10) as freq,substr(o.name, 1, 30) as org_name,erc.report_config_type,et.type,erc.is_enabled as e,substr(erc.incremental_updated_when::varchar, 1, 16) as when from export_report_configs erc inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id order by o.name"
+}
+sms_delivery()
+{
+  echo $1
+  with_follower "select sm.organization_id,sr.type,sm.state,count(sm.id) from sms_messages sm inner join sms_routers sr on sm.router_id=sr.id where sm.recipient like '+$1%' and sm.created_when > now() - '1 hour'::interval group by 1,2,3 order by 1,2,3;"
 }
 seq_routers()
 {
-  with_follower "select srr.sequential_router_id,srr.position,sr.route,srrs.type,srrs.id as srrs_id,sr.id as sr_id,sr.description,round(sr.probability, 3) from sms_routers_routes srr inner join sms_routes sr on srr.route_id=sr.id inner join sms_routers srrs on sr.router_id=srrs.id order by srr.sequential_router_id,srr.position;"
+  with_follower "select srr.sequential_router_id as seq_id, srr.position as pos,sr.route,srrs.type,srrs.id as srrs_id,sr.id as sr_id,sr.description,round(sr.probability, 3) from sms_routers_routes srr inner join sms_routes sr on srr.route_id=sr.id inner join sms_routers srrs on sr.router_id=srrs.id order by srr.sequential_router_id,srr.position;"
 }
 
 zabill()
@@ -322,11 +381,11 @@ with d as (select date_trunc('hour', now()) - x.n * '1 hour'::interval as period
 
 # Redshift version
 
-with d as (select date_trunc('hour', sysdate) - n * '1 hour'::interval as hour from numbers n where n >= 0 and n <= 24*7) select d.hour, count(hr.path) from d left outer join http_requests hr on d.hour=date_trunc('hour', hr.time) and path like '%hooks/pegasus/airtel' group by d.hour order by d.hour desc;
+with d as (select date_trunc('hour', sysdate) - n * '1 hour'::interval as hour from numbers_0_to_1e6 n where n >= 0 and n <= 24*7) select d.hour, count(hr.path) from d left outer join http_requests hr on d.hour=date_trunc('hour', hr.time) and path like '%hooks/pegasus/airtel' group by d.hour order by d.hour desc;
 
-with d as (select date_trunc('hour', sysdate) - n * '1 hour'::interval as period from numbers n where n >= 0 and n <= 24*7) select d.period, count(1) from d left outer join http_requests hr on d.period=date_trunc('hour', hr.time) and path like '%safaricom%' and code=499 group by d.period order by d.period desc;
+with d as (select date_trunc('hour', sysdate) - n * '1 hour'::interval as period from numbers_0_to_1e6 n where n >= 0 and n <= 24*7) select d.period, count(1) from d left outer join http_requests hr on d.period=date_trunc('hour', hr.time) and path like '%safaricom%' and code=499 group by d.period order by d.period desc;
 
-with d as (select date_trunc('day', sysdate) - n * '1 hour'::interval as hour from numbers n where n >= 0 and n <= 7) select d.hour, count(hr.path) from d left outer join http_requests hr on d.hour=date_trunc('day', hr.time) and path like '%hooks/pegasus/airtel' group by d.hour order by d.hour desc;
+with d as (select date_trunc('day', sysdate) - n * '1 hour'::interval as hour from numbers_0_to_1e6 n where n >= 0 and n <= 7) select d.hour, count(hr.path) from d left outer join http_requests hr on d.hour=date_trunc('day', hr.time) and path like '%hooks/pegasus/airtel' group by d.hour order by d.hour desc;
 
 with d as (select date_trunc('day', sysdate) - n * '1 day'::interval as period from numbers_0_to_1e6 n where n >= 0 and n <= 90) select d.period, count(1) from d left outer join system_log_lines sll on d.period=date_trunc('day', sll.generated_at) and sll.message like '%Sentry responded with an error%' group by d.period order by d.period desc;
 
@@ -402,6 +461,29 @@ SELECT nspname || '.' || relname AS "relation",
 # Set passwords to mine
 
 update users set password_=(select password_ from users where id=422);
+
+# Pretty print SQLAlchemy query
+
+def prettyprintable(statement, dialect=None, reindent=True):
+    """Generate an SQL expression string with bound parameters rendered inline
+    for the given SQLAlchemy statement. The function can also receive a
+    `sqlalchemy.orm.Query` object instead of statement.
+    can 
+
+    WARNING: Should only be used for debugging. Inlining parameters is not
+             safe when handling user created data.
+    """
+    import sqlparse
+    import sqlalchemy.orm
+    if isinstance(statement, sqlalchemy.orm.Query):
+        if dialect is None:
+            dialect = statement.session.get_bind().dialect
+        statement = statement.statement
+    compiled = statement.compile(dialect=dialect,
+                                 compile_kwargs={'literal_binds': True})
+    return sqlparse.format(str(compiled), reindent=reindent)
+
+print(prettyprintable(query.statement))
 
 EOF
 }

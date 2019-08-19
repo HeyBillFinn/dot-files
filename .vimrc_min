@@ -86,9 +86,10 @@ set smartcase
 
 nnoremap <silent> <Space> :nohlsearch<Bar>:echo<CR>
 
-cabbr trim %s/\s\+$//e
+" cabbr trim %s/\s\+$//e
 autocmd FileType conf,xml,java,vim,c,cpp,java,php,ruby,python,javascript autocmd BufWritePre <buffer> :%s/\s\+$//e
 autocmd FileType xml,python,javascript,html,java,c setlocal shiftwidth=4 tabstop=4
+autocmd FileType markdown setlocal textwidth=80
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
@@ -101,11 +102,14 @@ nnoremap <C-N><C-N> :set invnumber<CR>:set invrelativenumber<CR>
 
 vnoremap Y "+y
 nnoremap Y "+y
-nnoremap ,p "+p
+" nnoremap ,p "+p
 nnoremap ,<c-v> :set paste!<cr>
 
 nnoremap n nzz
 nnoremap N Nzz
+
+
+nnoremap ,y :silent exec system('yarn import-sort --write ' . expand("%:p"))<cr>
 
 nnoremap <c-j> :m .+1<CR>
 nnoremap <c-k> :m .-2<CR>

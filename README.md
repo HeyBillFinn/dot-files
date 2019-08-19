@@ -9,6 +9,9 @@ These are my dot-files.
 sudo apt-get install unity-tweak-tool gnome-tweak-tool
 ```
 - Manage multiple clipboards using [CopyQ](https://github.com/hluk/CopyQ)
+  - Global shortcut:
+    - <c-s-1> Show main window
+    - <c-s-@> Copy second item
 - Take better screenshots using `shutter`
 ```
 sudo add-apt-repository ppa:shutter/ppa
@@ -37,4 +40,21 @@ sudo apt-get install gpick
 
 - `fzf` -- fuzzy `ctrl-R` (and more) in terminal:
 
-https://github.com/junegunn/fz://github.com/junegunn/fzf
+https://github.com/junegunn/fzf
+
+- Custom shortcuts
+
+```
+<c-s->> /home/bill/dot-files/bin/add_quote.sh
+<c-s-print> shutter -s
+```
+-
+-
+
+- Vim 8
+
+```
+sudo add-apt-repository ppa:jonathonf/vim
+sudo apt update
+sudo apt install vim
+```

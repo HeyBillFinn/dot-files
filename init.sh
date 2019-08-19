@@ -44,7 +44,21 @@ if [ -n "$1" ]; then
     git clone https://github.com/VundleVim/Vundle.vim ~/.vim/bundle/Vundle.vim
     # pip install watchdog
     # vim-gnome provides clipboard support
-    sudo apt-get install tmux ack-grep ctags vim-gnome silversearcher-ag python-pip
+    sudo apt-get install tmux ack-grep ctags vim-gnome silversearcher-ag python-pip uuid
+    # Install vim 8.x
+    sudo add-apt-repository ppa:jonathonf/vim
+    sudo apt update
+    sudo apt install vim
+
+    sudo apt install moreutils
+
+    # Make shared clipboard work from vagrant guest using lxc:
+    sudo apt-get install xauth xsel
+
+    # FZF
+    git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf
+    ~/.fzf/install --completion --no-key-bindings --update-rc
+
     sudo pip install virtualenv
     mkdir -p ~/local
     if [ ! -d ~/local/venv ]; then

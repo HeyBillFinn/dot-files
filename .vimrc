@@ -23,6 +23,7 @@ Plugin 'plasticboy/vim-markdown'
 Plugin 'mgedmin/pythonhelper'
 Plugin 'solars/github-vim'
 Plugin 'w0rp/ale'
+Plugin 'mattboehm/vim-unstack'
 let g:airline#extensions#branch#displayed_head_limit = 10
 
 call vundle#end()            " required
@@ -64,7 +65,7 @@ nmap <F8> <Plug>(ale_previous_wrap)
 nmap <F9> <Plug>(ale_next_wrap)
 
 let g:ale_python_black_executable = '/home/vagrant/local/venv36/bin/black'
-let g:ale_fixers = { '*': ['remove_trailing_lines'], 'python': ['black'] }
+let g:ale_fixers = { '*': ['remove_trailing_lines', 'trim_whitespace'], 'python': ['isort', 'black'] }
 
 let g:syntastic_enable_highlighting = 0
 let g:syntastic_enable_signs = 0
