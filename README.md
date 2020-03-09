@@ -58,3 +58,53 @@ sudo add-apt-repository ppa:jonathonf/vim
 sudo apt update
 sudo apt install vim
 ```
+
+- Github vim plugin yank fully qualified URL
+
+```
+diff --git a/plugin/github.vim b/plugin/github.vim
+index 12e1d83..6510b7b 100644
+--- a/plugin/github.vim
++++ b/plugin/github.vim
+@@ -76,6 +76,12 @@ noremap <silent> <SID>Yank :call <SID>Yank()<CR>
+ 
+ " --- helpers --- "
+ 
++" commit
++function! s:Commit() "+error checks
++  let dir = expand("%:p:h")
++  return substitute(s:CdExec(dir,'git rev-parse @{0}'), "\n",'','g')
++endfunction
++
+ " repository root path of current file
+ function! s:RepositoryRoot() "+error checks
+   if !exists('b:repos_root')
+@@ -153,7 +159,7 @@ endfunction
+ " the github repository url
+ function! s:ReposUrl()
+   if !exists('b:repos_url')
+-    let b:repos_url = s:ProjectUrl().'/blob/'.s:CurrentBranch()
++    let b:repos_url = s:ProjectUrl().'/blob/'.s:Commit()
+   endif
+   return b:repos_url
+ endfunction
+```
+
+Or:
+
+```
+diff --git a/plugin/github.vim b/plugin/github.vim
+index 12e1d83..1072f16 100644
+--- a/plugin/github.vim
++++ b/plugin/github.vim
+@@ -28,7 +28,8 @@ function! s:Yank()
+   if empty(s:RepositoryRoot()) || empty(s:Remote())
+     call s:error("File not in repository or no remote found!")
+   else
+-    let url = s:ReposUrl().'/'.s:RelPath() . s:Hash(a:firstline,a:lastline)
++    let commit_lines = split(s:CdExec(expand("%:p:h"),'git rev-parse @{0}'),"\n")
++    let url = s:ProjectUrl().'/blob/'.commit_lines[0].'/'.s:RelPath() . s:Hash(a:firstline,a:lastline)
+     call s:YankUrl(url)
+     echo "GitHub URL: " . url
+   end
+```

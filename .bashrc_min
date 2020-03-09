@@ -85,6 +85,16 @@ gitmv()
   git grep -l "$1" | xargs sed -i "s/$1/$2/g"
 }
 
+glb()
+{
+  git log -p $1...`git merge-base $1 master`
+}
+
+gdb()
+{
+  git diff master...$1
+}
+
 gitfixup()
 {
   git commit --fixup=$1
@@ -149,7 +159,7 @@ bind "set completion-ignore-case on"
 bind "set show-all-if-ambiguous on"
 
 alias gdm='git diff master...HEAD'
-alias glm='git log -p master...HEAD'
+alias glm='git log -p master..HEAD'
 alias gg='git grep -n '
 alias gpush='git push -u origin HEAD'
 alias grebase='gmaster && git checkout - && git rebase master'
@@ -162,15 +172,18 @@ alias src='source ~/.bashrc'
 alias alembicc='alembic -c ~/Projects/Angaza/alembic.ini '
 alias alembichistory='alembicc history | less'
 alias alembichead='alembicc upgrade head'
-alias sandboxdemodb='export ZA_SANDBOX_DEMO_DATABASE_URI=`envdir ~/Projects/Angaza/variables.aws summon -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e sandbox -D ENV=sandbox-demo printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
+alias sandboxdemodb='export ZA_SANDBOX_DEMO_DATABASE_URI=`envdir ~/Projects/Angaza/variables.aws summon --ignore-all -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e sandbox -D ENV=sandbox-demo printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
+alias sandboxstagingdb='export ZA_SANDBOX_STAGING_DATABASE_URI=`envdir ~/Projects/Angaza/variables.aws summon --ignore-all -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e sandbox -D ENV=sandbox-staging printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
 alias proddb='export ZA_PROD_DATABASE_URI=`cd payg-deploy > /dev/null && summon -e PRODUCTION printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
 alias analyticsdb='export ZA_ANALYTICS_DATABASE_URL=`envdir ~/Projects/Angaza/variables.aws summon -f ~/Projects/Angaza/payg-backend/buildkite/periodic-tasks/check-follower-lag-secrets.yml printenv | grep "^ANALYTICS_FOLLOWER_DATABASE_URL=" | cut -d "=" -f 2`'
 alias exportdb='export ZA_EXPORT_DATABASE_URL=`envdir ~/Projects/Angaza/variables.aws summon -f ~/Projects/Angaza/payg-backend/buildkite/periodic-tasks/check-follower-lag-secrets.yml printenv | grep "^EXPORTS_FOLLOWER_DATABASE_URL=" | cut -d "=" -f 2`'
 alias followerdb='export ZA_FOLLOWER_DATABASE_URL=`cd payg-deploy > /dev/null && summon -e follower printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
 alias heybillfinndb='export ZA_HEYBILLFINN_FORK_URL=`cd payg-deploy > /dev/null && summon -f ~/Projects/Angaza/payg-deploy/secrets.yml -e heroku_admin heroku config --app angaza-production | grep HEYBILLFINN | awk '"'"'{print $2}'"'"'`'
 alias ec2instances='export ZA_EC2_INSTANCES=`ec2-host`'
-alias ensure_bill='export ZA_BILL_INSTANCE=`cd payg-deploy > /dev/null && fab group_list_all:production,deploy | grep billfinn | cut -d " " -f 1`'
-alias bizinstance='export ZA_BIZ_INSTANCE=`ec2-host | grep production__biz- | sed "s/\(.*\)\s\+\(.*\)/\2/g"`'
+alias ensure_bill='export ZA_BILL_INSTANCE=`cd payg-deploy > /dev/null && ec2-host $(cd payg-deploy > /dev/null && fab group_list_all:production,deploy | grep billfinn | cut -d " " -f 1)`'
+alias ensure_batch_instance='export ZA_BATCH_INSTANCE=`cd payg-deploy > /dev/null && ec2-host $(cd payg-deploy > /dev/null && fab group_list_all:production,biz_batch | grep production__biz_batch | tail -n 1 | cut -d " " -f 1)`'
+alias ensure_biz_internal_instance='export ZA_BIZ_INTERNAL_INSTANCE=`cd payg-deploy > /dev/null && ec2-host $(cd payg-deploy > /dev/null && fab group_list_all:production,biz_internal_api | grep production__biz_internal | tail -n 1 | cut -d " " -f 1)`'
+# alias ensure_internal_biz_instance='export ZA_BIZ_INSTANCE=`ec2-host | grep production__biz- | sed "s/\(.*\)\s\+\(.*\)/\2/g"`'
 #alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
 alias sshprod='ec2-ssh `fab group_list_all:production | grep "^production__biz" | awk "{print $1}"`'
 alias alembicbranchpoint='AL_HISTORY=`alembic history` && AL_BR_REVISION=`echo "$AL_HISTORY" | grep "(branchpoint)" | awk '"'"'{print $3}'"'"'` && echo "branchpoint: $AL_BR_REVISION" && echo "$AL_HISTORY" | grep -C 1 "^$AL_BR_REVISION\|(head)"'
@@ -178,6 +191,11 @@ alias f8='flake8 --show-source --config=flake8.ini za'
 alias vssh='vagrant ssh'
 alias celerydemo='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_sandbox celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
 alias celeryprodbeat='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za beat --loglevel=INFO'
+alias zapsqlstaging='ensure_sandbox_staging && DATABASE_URI=$ZA_SANDBOX_STAGING_DATABASE_URI za-psql -u bill@angazadesign.com -p armynosegrandfather'
+alias zapsqlprod='ensure_production && DATABASE_URI=$ZA_PROD_DATABASE_URI za-psql -u bill@angazadesign.com -p armynosegrandfather'
+# More expensive, but includes all variables
+alias zapsqlprodallenv='envdir ~/Projects/Angaza/variables.aws/ summon -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e production -D ENV=production za-psql -u bill@angazadesign.com'
+alias zapsqlfollower='ensure_follower && DATABASE_URI=$ZA_FOLLOWER_DATABASE_URL envdir ~/Projects/Angaza/variables.aws za-psql -u bill@angazadesign.com -p armynosegrandfather'
 alias countries='python -c "from babel import Locale; l = Locale('"'"'en'"'"', '"'"'US'"'"'); print((u'"'"'\n'"'"'.join([u'"'"'{}:{}'"'"'.format(k, v) for (k, v) in l.territories.iteritems()])).encode('"'"'utf-8'"'"'))" | sort | less'
 alias utcdate='date -u +%Y%m%dT%H%M%SZ'
 alias utcclip='date -u +%Y%m%d | tr -d "\n" | xsel --clipboard'
@@ -187,7 +205,7 @@ alias filenamedate='date +%Y-%m-%d_%H%M%SZ'
 alias fabwheelupload='fab wheelhouse_upload:`ls -m ~/Projects/Angaza/payg-backend/*.whl | tr -d " " | tr -d "\n"`'
 alias ec2host='envdir ~/Projects/Angaza/variables.aws ec2-host'
 alias listgroups='cd ~/Projects/Angaza/payg-deploy && fab group_list_all:production'
-alias demoserve='envdir ../variables.aws/ envdir ../variables.demo/ za-serve-gunicorn za.blueprints.admin:/raw za.blueprints.biz_api_internal:/api --workers 2'
+alias demoserve='envdir ../variables.aws/ envdir ../variables.demo/ za-serve-gunicorn za.blueprints.admin:/raw za.blueprints.biz_api_internal:/api za.blueprints.biz_api_external:/data --workers 2'
 alias zapsqldemo='DATABASE_URI="postgres:///za_demo" envdir ../variables.aws/ za-psql -u system@angaza.com'
 alias followerserve='ensure_follower && DATABASE_URI=$ZA_FOLLOWER_DATABASE_URL za-serve-gunicorn za.blueprints.biz_api_internal:/api --workers 2 --timeout 120'
 watchdb()
@@ -233,7 +251,14 @@ sshbill()
   if [[ -z "${ZA_BILL_INSTANCE}" ]]; then
     ensure_bill
   fi
-  ec2-ssh -A $ZA_BILL_INSTANCE
+  ssh -A ubuntu@$ZA_BILL_INSTANCE
+}
+sshbatch()
+{
+  if [[ -z "${ZA_BATCH_INSTANCE}" ]]; then
+    ensure_batch_instance
+  fi
+  ssh -A ubuntu@$ZA_BATCH_INSTANCE
 }
 scpbill()
 {
@@ -253,6 +278,12 @@ ensure_sandbox_demo()
     sandboxdemodb
   fi
 }
+ensure_sandbox_staging()
+{
+  if [[ -z "${ZA_SANDBOX_STAGING_DATABASE_URI}" ]]; then
+    sandboxstagingdb
+  fi
+}
 ensure_production()
 {
   if [[ -z "${ZA_PROD_DATABASE_URI}" ]]; then
@@ -263,6 +294,12 @@ ensure_follower()
 {
   if [[ -z "${ZA_FOLLOWER_DATABASE_URL}" ]]; then
     followerdb
+  fi
+}
+ensure_export_follower()
+{
+  if [[ -z "${ZA_EXPORT_FOLLOWER_DATABASE_URL}" ]]; then
+    exportdb
   fi
 }
 sql_statements()
@@ -290,9 +327,17 @@ with_follower()
   ensure_follower
   psql -d $ZA_FOLLOWER_DATABASE_URL -c "$1"
 }
+snapshot_report_configs()
+{
+  with_follower "select o.id,o.name,src.created_when,src.factory_name,src.frequency from snapshot_report_configs src inner join organizations o on src.organization_id=o.id order by o.name"
+}
 orgs()
 {
-  with_follower "select o.id,name,default_operating_country,sms_sender_text,preferred_sms_router_id as router_id, aav.version_code as app_version from organizations o inner join agent_app_versions aav on o.agent_app_version_id=aav.id $* order by name"
+  with_follower "select o.id,name,tier,default_operating_country as country,sms_sender_text,preferred_sms_router_id as router_id from organizations o $* order by name"
+}
+subscriptions()
+{
+  with_follower "select pp.id,o.name, pp.component, pp.price_point_id, pp.component_handle, uo.name as usage_org_name from subscription_billable_component_price_points pp inner join subscriptions s on pp.subscription_id=s.id inner join organizations o on s.organization_id=o.id inner join price_point_organization_associations ppoa on pp.id = ppoa.price_point_id inner join organizations uo on uo.id=ppoa.usage_organization_id order by o.name, pp.component"
 }
 products()
 {
@@ -339,12 +384,20 @@ export_report_configs()
   # with_follower "select erc.id,substr(erc.created_when::varchar, 1, 16) as created_when,substr(erc.frequency, 1, 10) as freq,substr(o.name, 1, 30) as org_name,erc.id,erc.report_config_type,et.type,erc.is_enabled as e,substr(erc.incremental_updated_when::varchar, 1, 10) as when,erc.table_reporter_kwargs,erc.db_kwargs,erc.report_kwargs from export_report_configs erc inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id order by o.name"
   with_follower "select erc.id,substr(erc.created_when::varchar, 1, 10) as created,substr(erc.frequency, 1, 10) as freq,substr(o.name, 1, 30) as org_name,erc.report_config_type,et.type,erc.is_enabled as e,substr(erc.incremental_updated_when::varchar, 1, 16) as when from export_report_configs erc inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id order by o.name"
 }
+failed_export_report_statuses()
+{
+  with_follower "select ers.scheduled_when,ers.state,ers.trace_id,erc.report_config_type,erc.frequency,o.name,et.type from export_report_statuses ers inner join export_report_configs erc on ers.export_report_config_id = erc.id inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id where ers.state in ('FAILED', 'ABANDONED') and ers.scheduled_when > now() - '7 days'::interval order by ers.scheduled_when desc"
+}
+sms_default_templates()
+{
+  with_follower "select st.type,stc.role,stc.is_enabled as e,stc.type,stcpe.start_after,stcpe.repeat_every,stcpe.stop_after,stcpre.waits_until from sms_templates st inner join sms_template_configs stc on st.config_id=stc.id left outer join sms_template_configs_post_event stcpe on stc.id=stcpe.id left outer join sms_template_configs_pre_event stcpre on stc.id=stcpre.id where st.type = 'DEFAULT' order by stc.role;"
+}
 sms_delivery()
 {
   echo $1
   with_follower "select sm.organization_id,sr.type,sm.state,count(sm.id) from sms_messages sm inner join sms_routers sr on sm.router_id=sr.id where sm.recipient like '+$1%' and sm.created_when > now() - '1 hour'::interval group by 1,2,3 order by 1,2,3;"
 }
-seq_routers()
+sms_seq_routers()
 {
   with_follower "select srr.sequential_router_id as seq_id, srr.position as pos,sr.route,srrs.type,srrs.id as srrs_id,sr.id as sr_id,sr.description,round(sr.probability, 3) from sms_routers_routes srr inner join sms_routes sr on srr.route_id=sr.id inner join sms_routers srrs on sr.router_id=srrs.id order by srr.sequential_router_id,srr.position;"
 }
@@ -352,6 +405,11 @@ seq_routers()
 zabill()
 {
   cat << "EOF"
+
+%load_ext autoreload
+%autoreload 2
+import nose
+nose.main(argv=["", "-s", "za/test/biz/reports/test_bonuses.py:TestBonusesTableReporter.test_bonuses_report__with_filter_by_products__ok"])
 
 # Check all biz supervisor processes
 
@@ -396,7 +454,7 @@ select srr.sequential_router_id,srr.position,sr.route,srrs.type,srrs.id as srrs_
 
 envdir variables/ za-psql -u bill@angazadesign.com `cat ~/variables/DATABASE_URI`
 
-select pid,client_addr,client_port as port,substr(query_start::varchar, 1, 18),substr(query, 1, 50),substr(state, 1, 7),substr((now()-query_start)::varchar, 1, 8) as duration from pg_stat_activity where state != 'idle' order by query_start;
+select pid,application_name,client_addr,client_port as port,substr(query_start::varchar, 1, 18),substr(query, 1, 50),substr(state, 1, 7),substr((now()-query_start)::varchar, 1, 8) as duration from pg_stat_activity where state != 'idle' order by query_start;
 
 select pid,client_addr,client_port,query_start,substr(query, 20),state from pg_stat_activity where state != 'idle' order by query_start;
 

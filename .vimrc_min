@@ -93,6 +93,7 @@ autocmd FileType markdown setlocal textwidth=80
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
+cabbr sqlformat %!sqlformat --reindent --keywords upper --identifiers lower -
 
 set listchars=tab:▸\ ,trail:·
 set list
