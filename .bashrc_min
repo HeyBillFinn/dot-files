@@ -82,7 +82,7 @@ bind '"\C-p": "\C-x\C-addi`__fzf_persistent_history__`\C-x\C-e\C-x\C-r\C-x^\C-x\
 
 gitmv()
 {
-  git grep -l "$1" | xargs sed -i "s/$1/$2/g"
+  git grep -G -l "$1" | xargs sed -i "s/$1/$2/g"
 }
 
 glb()
@@ -103,6 +103,9 @@ gitfixup()
 
 gitpushtmp()
 {
+  if [ "$#" -gt 2 ]; then
+    echo "Illegal number of parameters"
+  fi
   branchName=$(git rev-parse --abbrev-ref HEAD)
   if ! [[ $branchName =~ ^dev.*$ ]]; then
     echo "error: not on dev branch"
@@ -114,14 +117,67 @@ gitpushtmp()
     echo "branch $tmpBranchName doesn't exist; creating"
     git branch $tmpBranchName
   fi
-  echo "updating $tmpBranchName to $branchName"
-  git branch -f $tmpBranchName $branchName
-  echo "force pushing $tmpBranchName"
+
+  if [ "$#" -gt 0 ]; then
+    if [ "$#" -eq 2 ]; then
+      # Ignore $1; we just use it as a flag to indicate "all"
+      for hash in `git log --reverse --format='%H' $2^...HEAD`; do
+        echo "force pushing $tmpBranchName to $hash"
+        git push -f -u origin $hash:$tmpBranchName
+      done
+    else
+      echo "force pushing $tmpBranchName to $1"
+      git push -f -u origin $1:$tmpBranchName
+    fi
+  else
+    echo "updating $tmpBranchName to $branchName"
+    git branch -f $tmpBranchName $branchName
+    echo "force pushing $tmpBranchName"
+    if ! [[ $tmpBranchName =~ ^tmp.*$ ]]; then
+      echo "error: tmp branch incorrectly formatted"
+      return 1
+    fi
+    git push -u origin $tmpBranchName -f
+  fi
+}
+gitreapply()
+{
+  # Starting at a commit in the current branch's history, cherry-pick all of
+  # the commits up until HEAD on top of the `startBranch`
+  if [ "$#" -ne 2 ]; then
+    echo "Illegal number of parameters"
+    return
+  fi
+  startBranch=$1
+  startCommit=$2
+  echo "branch: $startBranch"
+  echo "start commit: $startCommit"
+  branchName=$(git rev-parse --abbrev-ref HEAD)
+  if ! [[ $branchName =~ ^dev.*$ ]]; then
+    echo "error: not on dev branch"
+    return 1
+  fi
+  if ! [[ $startBranch =~ ^dev.*$ ]] && ! [[ $startBranch == 'master' ]]; then
+    echo "error: branch is not dev or master"
+    return 1
+  fi
+  echo "currently at commit $(git rev-parse HEAD)"
+  tmpBranchName=$(echo $branchName | sed 's/^dev/tmp/')
+  branchExists=$(git rev-parse --verify $tmpBranchName 2>/dev/null)
+  if [[ -z $branchExists ]]; then
+    echo "branch $tmpBranchName doesn't exist; creating"
+    git branch $tmpBranchName
+  fi
+  echo "updating $tmpBranchName to $startBranch"
+  git branch -f $tmpBranchName $startBranch
+  echo "checking out $tmpBranchName"
+  git checkout $tmpBranchName
+  echo "cherry-picking $startCommit^..$branchName"
   if ! [[ $tmpBranchName =~ ^tmp.*$ ]]; then
     echo "error: tmp branch incorrectly formatted"
     return 1
   fi
-  git push -u origin $tmpBranchName -f
+  git cherry-pick $startCommit^..$branchName
 }
 
 alias nt='nosetests -s --with-progressive --logging-level=INFO'
@@ -162,12 +218,13 @@ alias gdm='git diff master...HEAD'
 alias glm='git log -p master..HEAD'
 alias gg='git grep -n '
 alias gpush='git push -u origin HEAD'
+alias glstag='git log --tags --simplify-by-decoration --pretty="format:%ci %d" | sort -r | less'
 alias grebase='gmaster && git checkout - && git rebase master'
 alias gamend='git commit --amend --no-edit'
 alias gm='git checkout master'
-alias gfa='git fetch --all'
+alias gfo='git fetch origin && [ `git rev-parse --abbrev-ref HEAD` == "master" ] && gmr || git fetch . origin/master:master'
 alias gmr='git merge --ff-only @{u}'
-alias gmaster='git checkout master && git fetch --all && git merge --ff-only @{u}'
+alias gmaster='git checkout master && git fetch origin && git merge --ff-only @{u}'
 alias src='source ~/.bashrc'
 alias alembicc='alembic -c ~/Projects/Angaza/alembic.ini '
 alias alembichistory='alembicc history | less'
@@ -180,7 +237,7 @@ alias exportdb='export ZA_EXPORT_DATABASE_URL=`envdir ~/Projects/Angaza/variable
 alias followerdb='export ZA_FOLLOWER_DATABASE_URL=`cd payg-deploy > /dev/null && summon -e follower printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
 alias heybillfinndb='export ZA_HEYBILLFINN_FORK_URL=`cd payg-deploy > /dev/null && summon -f ~/Projects/Angaza/payg-deploy/secrets.yml -e heroku_admin heroku config --app angaza-production | grep HEYBILLFINN | awk '"'"'{print $2}'"'"'`'
 alias ec2instances='export ZA_EC2_INSTANCES=`ec2-host`'
-alias ensure_bill='export ZA_BILL_INSTANCE=`cd payg-deploy > /dev/null && ec2-host $(cd payg-deploy > /dev/null && fab group_list_all:production,deploy | grep billfinn | cut -d " " -f 1)`'
+alias ensure_bill='export ZA_BILL_INSTANCE=`cd payg-deploy > /dev/null && fab instance_list_all:production,deploy | grep billfinn.*i- |  tr -s " " | cut -d " " -f 4` && echo $ZA_BILL_INSTANCE'
 alias ensure_batch_instance='export ZA_BATCH_INSTANCE=`cd payg-deploy > /dev/null && ec2-host $(cd payg-deploy > /dev/null && fab group_list_all:production,biz_batch | grep production__biz_batch | tail -n 1 | cut -d " " -f 1)`'
 alias ensure_biz_internal_instance='export ZA_BIZ_INTERNAL_INSTANCE=`cd payg-deploy > /dev/null && ec2-host $(cd payg-deploy > /dev/null && fab group_list_all:production,biz_internal_api | grep production__biz_internal | tail -n 1 | cut -d " " -f 1)`'
 # alias ensure_internal_biz_instance='export ZA_BIZ_INSTANCE=`ec2-host | grep production__biz- | sed "s/\(.*\)\s\+\(.*\)/\2/g"`'
@@ -192,10 +249,10 @@ alias vssh='vagrant ssh'
 alias celerydemo='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_sandbox celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
 alias celeryprodbeat='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za beat --loglevel=INFO'
 alias zapsqlstaging='ensure_sandbox_staging && DATABASE_URI=$ZA_SANDBOX_STAGING_DATABASE_URI za-psql -u bill@angazadesign.com -p armynosegrandfather'
-alias zapsqlprod='ensure_production && DATABASE_URI=$ZA_PROD_DATABASE_URI za-psql -u bill@angazadesign.com -p armynosegrandfather'
+alias zapsqlprod='ensure_production && ZA_SQL_LOG_PATH="/tmp/za-psql-prod.log" DATABASE_URI=$ZA_PROD_DATABASE_URI za-psql -u bill@angazadesign.com -p armynosegrandfather'
 # More expensive, but includes all variables
 alias zapsqlprodallenv='envdir ~/Projects/Angaza/variables.aws/ summon -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e production -D ENV=production za-psql -u bill@angazadesign.com'
-alias zapsqlfollower='ensure_follower && DATABASE_URI=$ZA_FOLLOWER_DATABASE_URL envdir ~/Projects/Angaza/variables.aws za-psql -u bill@angazadesign.com -p armynosegrandfather'
+alias zapsqlfollower='ensure_follower && ZA_SQL_LOG_PATH="/tmp/za-psql-follower.log" DATABASE_URI=$ZA_FOLLOWER_DATABASE_URL envdir ~/Projects/Angaza/variables.aws za-psql -u bill@angazadesign.com -p armynosegrandfather'
 alias countries='python -c "from babel import Locale; l = Locale('"'"'en'"'"', '"'"'US'"'"'); print((u'"'"'\n'"'"'.join([u'"'"'{}:{}'"'"'.format(k, v) for (k, v) in l.territories.iteritems()])).encode('"'"'utf-8'"'"'))" | sort | less'
 alias utcdate='date -u +%Y%m%dT%H%M%SZ'
 alias utcclip='date -u +%Y%m%d | tr -d "\n" | xsel --clipboard'
@@ -206,7 +263,7 @@ alias fabwheelupload='fab wheelhouse_upload:`ls -m ~/Projects/Angaza/payg-backen
 alias ec2host='envdir ~/Projects/Angaza/variables.aws ec2-host'
 alias listgroups='cd ~/Projects/Angaza/payg-deploy && fab group_list_all:production'
 alias demoserve='envdir ../variables.aws/ envdir ../variables.demo/ za-serve-gunicorn za.blueprints.admin:/raw za.blueprints.biz_api_internal:/api za.blueprints.biz_api_external:/data --workers 2'
-alias zapsqldemo='DATABASE_URI="postgres:///za_demo" envdir ../variables.aws/ za-psql -u system@angaza.com'
+alias zapsqldemo='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI="postgres:///za_demo" envdir ../variables.aws/ za-psql -u system@angaza.com'
 alias followerserve='ensure_follower && DATABASE_URI=$ZA_FOLLOWER_DATABASE_URL za-serve-gunicorn za.blueprints.biz_api_internal:/api --workers 2 --timeout 120'
 watchdb()
 {

@@ -3,7 +3,7 @@
 SESSIONNAME="za"
 
 vagrant_ssh() {
-  tmux send-keys -t $SESSIONNAME "cd ~/Projects/payg-development/swat" C-m
+  tmux send-keys -t $SESSIONNAME "cd ~/Projects/Angaza/payg-development/swat" C-m
   tmux send-keys -t $SESSIONNAME "vagrant ssh" C-m
   sleep 1
 }

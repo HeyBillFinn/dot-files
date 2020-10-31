@@ -89,11 +89,11 @@ nnoremap <silent> <Space> :nohlsearch<Bar>:echo<CR>
 " cabbr trim %s/\s\+$//e
 autocmd FileType conf,xml,java,vim,c,cpp,java,php,ruby,python,javascript autocmd BufWritePre <buffer> :%s/\s\+$//e
 autocmd FileType xml,python,javascript,html,java,c setlocal shiftwidth=4 tabstop=4
-autocmd FileType markdown setlocal textwidth=80
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
 cabbr sqlformat %!sqlformat --reindent --keywords upper --identifiers lower -
+" nnoremap ,r :silent exec system('isort -sl ' . expand("%:p") . ' > /dev/null && autoflake --remove-all-unused-imports --in-place ' . expand("%:p") . ' > /dev/null && isort ' . expand("%:p") . ' > /dev/null')<cr>
 
 set listchars=tab:▸\ ,trail:·
 set list
@@ -110,7 +110,7 @@ nnoremap n nzz
 nnoremap N Nzz
 
 
-nnoremap ,y :silent exec system('yarn import-sort --write ' . expand("%:p"))<cr>
+nnoremap ,z :silent exec system('za-fix-style ' . expand("%:p") . ' > /dev/null') <Bar> e <cr>
 
 nnoremap <c-j> :m .+1<CR>
 nnoremap <c-k> :m .-2<CR>

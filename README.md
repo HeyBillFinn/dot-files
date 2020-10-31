@@ -21,13 +21,10 @@ sudo apt-get update && sudo apt-get install shutter
 ```
 sudo apt-get install compizconfig-settings-manager
 ```
-- Make shared clipboard work from vagrant guest using lxc:
-```
-sudo apt-get install xauth xsel
-```
 - Make iPython use vim key bindings
 ```
 ipython profile create
+vim ~/.ipython/profile_default/ipython_config.py
 c.TerminalInteractiveShell.editing_mode = 'vi'
 
 # cf. http://stackoverflow.com/a/38329940
@@ -47,16 +44,6 @@ https://github.com/junegunn/fzf
 ```
 <c-s->> /home/bill/dot-files/bin/add_quote.sh
 <c-s-print> shutter -s
-```
--
--
-
-- Vim 8
-
-```
-sudo add-apt-repository ppa:jonathonf/vim
-sudo apt update
-sudo apt install vim
 ```
 
 - Github vim plugin yank fully qualified URL
