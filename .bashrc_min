@@ -273,6 +273,9 @@ glb()
 {
   git log -p $1...`git merge-base $1 master`
 }
+who_changes() {
+  git log --since="1 year ago" --pretty='%al' -- "$1" | sort | uniq -c | sort -k2 -n -r | awk '{print "https://home.corp.stripe.com/people/" $2 " " $1}'
+}
 
 gdb()
 {
