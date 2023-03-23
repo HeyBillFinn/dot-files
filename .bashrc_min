@@ -288,6 +288,12 @@ gitfixup()
   git rebase -i --autosquash $1~1
 }
 
+gitcommitandrebase()
+{
+  git commit -m 'tmp'
+  git rebase $@
+}
+
 gitpushtmp()
 {
   if [ "$#" -gt 2 ]; then
