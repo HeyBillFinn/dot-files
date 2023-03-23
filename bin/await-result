@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+"$@"
+result=$?
+
+if [[ $result == 0 ]]; then
+    osascript -e "display notification \"Command Finished\" with title \"$1\""
+    say "Command Finished"
+else
+    osascript -e "display notification \"Command Failed\" with title \"$1\""
+    say "Command Failed"
+fi
+
+exit $result
