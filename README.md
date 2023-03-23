@@ -95,3 +95,9 @@ index 12e1d83..1072f16 100644
      echo "GitHub URL: " . url
    end
 ```
+
+- Remove "a" and "b" prefixes from git diff:
+
+```
+git config --global diff.noprefix true
+```
