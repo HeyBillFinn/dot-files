@@ -2,6 +2,15 @@
 set -o vi
 export EDITOR=vim
 
+unameOut="$(uname -s)"
+case "${unameOut}" in
+    Linux*)     machine=Linux;;
+    Darwin*)    machine=Mac;;
+    CYGWIN*)    machine=Cygwin;;
+    MINGW*)     machine=MinGw;;
+    *)          machine="UNKNOWN:${unameOut}"
+esac
+
 PERSISTENT_HISTORY_FILE="$HOME/dot-files/.persistent_history"
 HISTTIMEFORMAT="%F %T "
 log_bash_persistent_history()
