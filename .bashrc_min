@@ -418,6 +418,51 @@ if [[ $HOSTNAME == "vagrant"* ]]
 then
   PS1="\[\033[37m\]\t\[\033[m\]-\[\033[36m\]\u\[\033[m\]@\[\033[32m\]\h:\[\033[33;1m\]\w\[\033[m\]\$ "
 fi
+parse_git_branch() {
+  git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ (\1)/'
+}
+
+rmgradlecache() {
+  find ~/.gradle/caches/ -name "*stripe*$1" -exec rm -rvf {} \;
+}
+
+export PS1="\u@\h \[\033[32m\]\w\[\033[33m\]\$(parse_git_branch)\[\033[00m\] $ "
+# alias notify'osascript -e '"'"'display notification "hello world!"'"'"'
+
+wb() {
+  if [ "$#" -eq 0 ]; then
+    echo "Illegal number of parameters"
+    return 1
+  fi
+  work begin --no-pr --title "'work-cli-$*'"
+}
+
+#alias wb='work begin --no-pr --title '
+alias wpc='work pr create --with-edit'
+alias wr='work review $(cat ~/dot-files/.stripe-android-usernames.txt | fzf)'
+
+alias boundson='adb shell setprop debug.layout true; adb shell service call activity 1599295570 > /dev/null'
+alias boundsoff='adb shell setprop debug.layout false ; adb shell service call activity 1599295570 > /dev/null'
+alias rmmvnlocal='rm -rvf ~/.m2/repository/com/stripe/stripeterminal*'
+alias rmgradlesnapshots="find ~/.gradle/caches/ -name '*stripe*SNAPSHOT' -exec rm -rvf {} \\;"
+alias adbwpe='adb -s f85e6a55'
+alias adbpixel3='adb -s 8C9X1L79K'
+alias adbs10='adb -s RF8N41V8P0T'
+alias readerreinstallapp='type readerreinstallapp; adbwpe install -t ./terminalapp/application/build/outputs/apk/debug/application-debug.apk && adbwpe shell am start -n com.stripe.terminal/.MainActivity'
+# alias readerreinstallreader='adb install ./reader/application/build/outputs/apk/debug/com.stripe.reader-debug.apk && adb shell am start -n com.stripe.reader/.MainActivity'
+alias readerreinstallreader='type readerreinstallreader; adbwpe install ./reader/application/build/outputs/apk/bbpos/debug/com.stripe.reader-bbpos-debug.apk'
+alias readerreinstallupdater='type readerreinstallupdater; adbwpe install ./updater/application/build/outputs/apk/bbpos/debug/com.stripe.updater-bbpos-debug.apk'
+alias readerbuildapp='type readerbuildapp; ./gradlew :terminalapp:application:assembleDebug && readerreinstallapp'
+alias readerstartupdater='type readerstartupdater; adbwpe shell am start -n com.stripe.updater/.MainActivity'
+alias readerbuildupdater='type readerbuildupdater; ./gradlew :updater:application:assembleDebug && readerreinstallupdater'
+alias readerbuildreaderandupdater='type readerbuildreaderandupdater; readerbuildreader && readerbuildupdater'
+# alias readerbuildreaderold='type readerbuildreaderold; ./gradlew :reader:application:assembleDebug && readerreinstallreader'
+# alias readerbuildreadernew='type readerbuildreadernew; ./gradlew :reader:application:assembleDebug -Ppaymentcollection="new" && readerreinstallreader'
+alias readerbuildreader='type readerbuildreader; ./gradlew :reader:application:assembleDebug && readerreinstallreader'
+alias readerbuildall='type readerbuildall; readerbuildreaderandapp && readerbuildupdater'
+alias readerbuildreaderandapp='type readerbuildreaderandapp; readerbuildreader && readerbuildapp'
+# alias readerbuildallold='type readerbuildallold; readerbuildreaderold && readerbuildapp && readerbuildupdater'
+alias grsdkpublishlocal='find ~/.gradle/caches/ -name "*stripe*SNAPSHOT" -exec rm -rvf {} \; ; rm -rvf ~/.m2/repository/com/stripe/stripeterminal* && grsdkclean && ./gradlew terminalsdk:publishAllLocal -PVERSION_NAME=SNAPSHOT --info'
 alias disablebracketedpaste='printf "\e[?2004l"'
 alias phgrep='cat $PERSISTENT_HISTORY_FILE|grep --color -n -a'
 alias ag='ack-grep --ignore-dir dist --ignore-file=ext:patch'
