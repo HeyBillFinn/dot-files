@@ -81,12 +81,19 @@ function ZaFixStyle(buffer)
   return 0
 endfunction
 
+function ClangFormat(buffer)
+  let l:filePath = expand("#" . a:buffer . ":p")
+  exec system('clang-format -i ' . l:filePath . '> /dev/null')
+  return 0
+endfunction
+
 let g:ale_python_black_executable = '/home/vagrant/local/venv36/bin/black'
 let g:ale_fixers = { '*': ['remove_trailing_lines', 'trim_whitespace'], 'python': ['isort', 'black'], 'javascript': ['eslint'] }
 let g:ale_python_flake8_executable = '/home/vagrant/local/venv/bin/flake8'
 
 " let g:ale_enabled = 0
-let g:ale_linters = { 'python': ['flake8'], 'javascript': ['eslint'] }
+let g:ale_linters = { 'python': ['flake8'], 'javascript': ['eslint'], 'ruby': ['rubocop'] }
+let g:ale_ruby_rubocop_executable = 'bundle'
 " let g:ale_lint_on_enter = 0
 " let g:ale_lint_on_filetype_changed = 0
 " let g:ale_lint_on_insert_leave = 0
