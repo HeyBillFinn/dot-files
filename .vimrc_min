@@ -97,7 +97,7 @@ function! AddStripes()
 endfunction
 
 set backspace=indent,eol,start
-cabbr src source ~/.vimrc
+" cabbr src source ~/.vimrc
 cabbr sqlformat %!sqlformat --reindent --keywords upper --identifiers lower -
 " nnoremap ,r :silent exec system('isort -sl ' . expand("%:p") . ' > /dev/null && autoflake --remove-all-unused-imports --in-place ' . expand("%:p") . ' > /dev/null && isort ' . expand("%:p") . ' > /dev/null')<cr>
 
@@ -118,12 +118,12 @@ nnoremap N Nzz
 
 nnoremap ,z :silent exec system('za-fix-style ' . expand("%:p") . ' > /dev/null') <Bar> e <cr>
 
-nnoremap <c-j> :m .+1<CR>
-nnoremap <c-k> :m .-2<CR>
-inoremap <c-j> <Esc>:m .+1<CR>gi
-inoremap <c-k> <Esc>:m .-2<CR>gi
-vnoremap <c-j> :m '>+1<CR>gv=gv
-vnoremap <c-k> :m '<-2<CR>gv=gv
+" nnoremap <c-j> :m .+1<CR>
+" nnoremap <c-k> :m .-2<CR>
+" inoremap <c-j> <Esc>:m .+1<CR>gi
+" inoremap <c-k> <Esc>:m .-2<CR>gi
+" vnoremap <c-j> :m '>+1<CR>gv=gv
+" vnoremap <c-k> :m '<-2<CR>gv=gv
 
 " Used by watchmedo, so only one event triggers per save
 set nobackup
