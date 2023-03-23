@@ -29,8 +29,10 @@ let g:airline#extensions#branch#displayed_head_limit = 10
 call vundle#end()            " required
 filetype plugin indent on    " required
 
-nnoremap ]p :GitGutterPreview<cr>
+nnoremap ]p :GitGutterPreviewHunk<cr>
 nnoremap ]r :GitGutterUndoHunk<cr>
+nnoremap <c-j> :GitGutterNextHunk<cr>
+nnoremap <c-k> :GitGutterPrevHunk<cr>
 " Help gitgutter refresh faster
 set updatetime=500
 
