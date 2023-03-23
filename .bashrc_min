@@ -300,11 +300,11 @@ gitpushtmp()
     echo "Illegal number of parameters"
   fi
   branchName=$(git rev-parse --abbrev-ref HEAD)
-  if ! [[ $branchName =~ ^dev.*$ ]]; then
-    echo "error: not on dev branch"
+  if [[ $branchName =~ ^master$ ]] || [[ $branchName =~ ^main$ ]]; then
+    echo "error: on master or main branch"
     return 1
   fi
-  tmpBranchName=$(echo $branchName | sed 's/^dev/tmp/')
+  tmpBranchName=$(echo $branchName | sed 's/^/tmp-/')
   branchExists=$(git rev-parse --verify $tmpBranchName 2>/dev/null)
   if [[ -z $branchExists ]]; then
     echo "branch $tmpBranchName doesn't exist; creating"
