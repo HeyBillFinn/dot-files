@@ -316,11 +316,11 @@ gitpushtmp()
       # Ignore $1; we just use it as a flag to indicate "all"
       for hash in `git log --reverse --format='%H' $2^...HEAD`; do
         echo "force pushing $tmpBranchName to $hash"
-        git push -f -u origin $hash:$tmpBranchName
+        CMD="git push --no-verify -f -u origin $hash:$tmpBranchName"
       done
     else
       echo "force pushing $tmpBranchName to $1"
-      git push -f -u origin $1:$tmpBranchName
+      CMD="git push --no-verify -f -u origin $1:$tmpBranchName"
     fi
   else
     echo "updating $tmpBranchName to $branchName"
@@ -330,9 +330,18 @@ gitpushtmp()
       echo "error: tmp branch incorrectly formatted"
       return 1
     fi
-    git push -u origin $tmpBranchName -f
+    # Don't skip verify because we're at HEAD
+    CMD="git push --no-verify -u origin $tmpBranchName -f"
   fi
+  echo $CMD
+  $CMD || notify_failed
 }
+
+notify_failed() {
+  osascript -e 'display notification "Failed"'
+  say failed
+}
+
 gitreapply()
 {
   # Starting at a commit in the current branch's history, cherry-pick all of
