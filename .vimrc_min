@@ -90,6 +90,11 @@ nnoremap <silent> <Space> :nohlsearch<Bar>:echo<CR>
 " cabbr trim %s/\s\+$//e
 autocmd FileType conf,xml,java,vim,c,cpp,java,php,ruby,python,javascript autocmd BufWritePre <buffer> :%s/\s\+$//e
 autocmd FileType xml,python,javascript,html,java,c setlocal shiftwidth=4 tabstop=4
+autocmd FileType markdown call AddStripes()
+
+function! AddStripes()
+  setlocal complete+=k dictionary+=/Users/billfinn/dot-files/.stripe-android-usernames.txt iskeyword+=- iskeyword+=/
+endfunction
 
 set backspace=indent,eol,start
 cabbr src source ~/.vimrc
