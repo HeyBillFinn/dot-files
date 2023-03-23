@@ -355,16 +355,16 @@ gitreapply()
   echo "branch: $startBranch"
   echo "start commit: $startCommit"
   branchName=$(git rev-parse --abbrev-ref HEAD)
-  if ! [[ $branchName =~ ^dev.*$ ]]; then
-    echo "error: not on dev branch"
+  if ! [[ $branchName =~ ^billfinn.*$ ]]; then
+    echo "error: not on billfinn branch"
     return 1
   fi
-  if ! [[ $startBranch =~ ^dev.*$ ]] && ! [[ $startBranch == 'master' ]]; then
-    echo "error: branch is not dev or master"
+  if ! [[ $startBranch =~ ^billfinn.*$ ]] && ! [[ $startBranch == 'master' ]]; then
+    echo "error: branch is not billfinn or master"
     return 1
   fi
   echo "currently at commit $(git rev-parse HEAD)"
-  tmpBranchName=$(echo $branchName | sed 's/^dev/tmp/')
+  tmpBranchName=$(echo $branchName | sed 's/^billfinn/tmp-billfinn/')
   branchExists=$(git rev-parse --verify $tmpBranchName 2>/dev/null)
   if [[ -z $branchExists ]]; then
     echo "branch $tmpBranchName doesn't exist; creating"
