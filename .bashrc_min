@@ -93,6 +93,173 @@ bind '"\C-x\C-r": redraw-current-line'
 bind '"\C-x^": history-expand-line'
 bind '"\C-p": "\C-x\C-addi`__fzf_persistent_history__`\C-x\C-e\C-x\C-r\C-x^\C-x\C-a$a\n"'
 
+explode_aar() {
+  TMP_DIR=$(mktemp -d)
+  unzip $1 -d $TMP_DIR || return 1
+  unzip $TMP_DIR/classes.jar -d $TMP_DIR/classes || return 1
+  echo $TMP_DIR/classes
+}
+
+gcmfile () {
+    changed_files=$(git diff --cached --name-only | xargs basename | sed 's/\.[^.]*$//' | uniq)
+    git commit -n -m "$changed_files: "
+    git commit --amend
+}
+
+alias gcmt="git commit -m 'trivial; ' && git commit --amend"
+
+gitbrowse () {
+  logfmt='%h %C(magenta)%aL%C(cyan)%d%C(white) %s %Creset- %ar'
+  git log --color=always --pretty="format:$logfmt" "$@" | fzf --ansi --no-sort --reverse --tiebreak=index --bind "enter:execute(git show -m {1})"
+}
+
+# https://polothy.github.io/post/2019-08-19-fzf-git-checkout/
+fzf-git-branch() {
+    git rev-parse HEAD > /dev/null 2>&1 || return
+
+    git branch --all --color=always --sort=-committerdate |
+        grep -v HEAD |
+        fzf --height 50% --ansi --no-multi --preview-window right:65% \
+            --preview 'git log -n 50 --color=always --date=short --pretty="format:%C(auto)%cd %h%d %s" $(sed "s/.* //" <<< {})' \
+            --tiebreak begin |
+        sed "s/.* //"
+}
+
+fzf-git-checkout() {
+    git rev-parse HEAD > /dev/null 2>&1 || return
+
+    local branch
+
+    branch=$(fzf-git-branch)
+    if [[ "$branch" = "" ]]; then
+        echo "No branch selected."
+        return
+    fi
+
+    # If branch name starts with 'remotes/' then it is a remote branch. By
+    # using --track and a remote branch name, it is the same as:
+    # git checkout -b branchName --track origin/branchName
+    if [[ "$branch" = 'remotes/'* ]]; then
+        git checkout --track $branch
+    else
+        git checkout $branch;
+    fi
+}
+alias sqlite='rlwrap sqlite3'
+alias cf='clang-format -i'
+alias gb='fzf-git-branch'
+alias gco='fzf-git-checkout'
+
+s()
+{
+  GIT_BASE_DIR=$(basename `git rev-parse --show-toplevel`)
+  if [ "$GIT_BASE_DIR" = "zoolander" ] || [ "$GIT_BASE_DIR" = "pay-server" ]; then
+    CMD="git status -uno"
+  else
+    CMD="git status"
+  fi
+  echo $CMD
+  $CMD
+}
+l()
+{
+  GIT_BASE_DIR=$(basename `git rev-parse --show-toplevel`)
+  if [ "$GIT_BASE_DIR" = "zoolander" ] || [ "$GIT_BASE_DIR" = "pay-server" ]; then
+    CMD="git log --max-count=10"
+  else
+    CMD="git log"
+  fi
+  echo $CMD
+  $CMD
+}
+grebasei()
+{
+  git rebase -i $1^
+}
+# alias hpr='hub pull-request'
+
+default_branch() {
+  echo $(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
+}
+
+openpr()
+{
+  if [ "$#" -gt 1 ]; then
+    echo "Illegal number of parameters"
+  fi
+  if [ "$#" -gt 0 ]; then
+    baseBranch=$1
+  else
+    baseBranch=$(default_branch)
+  fi
+  tmpFile=$(mktemp)
+  echo "Temp filename: $tmpFile"
+  cp .github/PULL_REQUEST_TEMPLATE.md $tmpFile
+  gsed -i '1s;^;PR Title\n\n;' $tmpFile
+  delimiter="<-- Lines below this will not be included in the PR description -->"
+
+  gitCommits=$(git log --pretty=format:"Commit: %H%nAuthor:%an%nDate:%ad%n%n%s%n%n%b" $baseBranch..HEAD)
+  printf "\n$delimiter\n" >> $tmpFile
+  printf "$gitCommits\n" >> $tmpFile
+
+  # Remove all trailing whitespace
+  gsed -i 's/[ \t]*$//' $tmpFile
+  # Disable auto-comment formatting
+  vim -c "set formatoptions-=cro | call AddStripes()" $tmpFile
+  vimExitCode=$?
+  if ! [[ $vimExitCode -eq 0 ]]; then
+    echo "error: vim exit code $vimExitCode"
+    return 1
+  fi
+
+  # Push branch, if required
+  diffUpstream=$(git diff --quiet @{u}..HEAD)
+  diffExitCode=$?
+  if ! [[ $diffExitCode -eq 0 ]]; then
+    git push --no-verify -u origin HEAD
+    if ! [[ $? -eq 0 ]]; then
+      cat $tmpFile
+      return 1
+    fi
+  fi
+
+  gsed -i "/$delimiter/Q" $tmpFile
+  # Remove last blank line
+  gsed -i '${/^$/d};' $tmpFile
+
+  title=$(head -n 1 $tmpFile)
+  echo "Title: $title"
+  # Delete the title and the blank line below the title
+  gsed -i '1,2d' $tmpFile
+
+  gh pr create --body-file $tmpFile --title "$title" -B $baseBranch
+  # hub pull-request -F $tmpFile -a bric-stripe,jil-stripe
+}
+alias viewpr='gh pr view --web'
+
+alias ghassignbricandjil='gh pr edit --add-assignee bric-stripe,jil-stripe'
+
+gcob()
+{
+  echo "deprecated; use b"
+  git checkout -b $USER/$1
+}
+
+b()
+{
+  git checkout -b $USER/$1
+}
+
+# git prune branch
+gpb()
+{
+  git checkout -q master && \
+    git for-each-ref refs/heads/ "--format=%(refname:short)" | while read branch; do \
+    mergeBase=$(git merge-base master $branch) && \
+    [[ $(git cherry master $(git commit-tree $(git rev-parse $branch\^{tree}) -p $mergeBase -m _)) == "-"* ]] && 
+    git branch -D $branch; \
+  done
+}
 gitmv()
 {
   git grep -G -l "$1" | xargs sed -i "s/$1/$2/g"
