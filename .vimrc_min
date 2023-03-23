@@ -67,6 +67,7 @@ set directory=$TEMP,$TMP,/tmp//,/var//tmp,.
 
 set number
 
+nnoremap s :let @0 = substitute(@0, "\\s\\+$","","g")<cr>:%s/<C-r>0/<C-r>0/g<left><left>
 nnoremap S :let @0 = substitute(@0, "\\s\\+$","","g")<cr>ea<space><esc>bdiw"0Plxb
 vnoremap S "0p
 
