@@ -262,7 +262,11 @@ gpb()
 }
 gitmv()
 {
-  git grep -G -l "$1" | xargs sed -i "s/$1/$2/g"
+  if [[ $machine == 'Mac' ]]; then
+    git grep -G -l -w "$1" | xargs gsed -i "s/\b$1\b/$2/g"
+  else
+    git grep -G -l "\b$1\b" | xargs sed -i "s/\b$1\b/$2/g"
+  fi
 }
 
 glb()
