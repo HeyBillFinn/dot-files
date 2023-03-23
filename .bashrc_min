@@ -380,6 +380,16 @@ gitreapply()
     return 1
   fi
   git cherry-pick $startCommit^..$branchName
+  if ! [[ $? -eq 0 ]]; then
+    echo -e "error: cherry picking failed. manually clean up and then force dev branch to HEAD\ngit branch -f $branchName HEAD"
+    return 1
+  fi
+  oldCommit=$(git rev-parse $branchName)
+  echo "branch $branchName was at $oldCommit; moving to $(git rev-parse HEAD)"
+  echo -e "to move back, run:\ngit branch -f $branchName $oldCommit"
+  git branch -f $branchName HEAD
+  git checkout $branchName
+  git branch -f $tmpBranchName $oldCommit
 }
 
 alias nt='nosetests -s --with-progressive --logging-level=INFO'
