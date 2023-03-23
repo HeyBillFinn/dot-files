@@ -67,6 +67,7 @@ nmap <F8> <Plug>(ale_previous_wrap)
 nmap <F9> <Plug>(ale_next_wrap)
 nnoremap ,r :ALEFix RemoveUnusedImportsPy <bar> e<CR>
 nnoremap ,z :ALEFix ZaFixStyle <bar> e<CR>
+nnoremap ,F :ALEFix ClangFormat <bar> e<CR>
 
 function RemoveUnusedImportsPy(buffer)
   let l:filePath = expand("#" . a:buffer . ":p")
