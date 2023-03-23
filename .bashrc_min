@@ -471,17 +471,40 @@ alias k='fc -s'
 bind "set completion-ignore-case on"
 bind "set show-all-if-ambiguous on"
 
+alias wraplineschanged='git diff `git merge-base master HEAD` | grep "^\+" | grep -E ".{102}|^\+\+"'
+alias ktlintchanged='CHANGED_FILES=`git --no-pager diff --name-only --diff-filter=d --no-color master HEAD -- "*.kt" "*.kts"`; echo -e $CHANGED_FILES | tr " " "\n"; ./gradlew --quiet ktlintFormat -PinternalKtlintGitFilter="$CHANGED_FILES"'
+alias cfchanged='cf `git diff --name-only --diff-filter=d master | grep -E "\.(m|h)$"`'
+
+alias g='git'
+alias gd='git diff --no-prefix'
+alias d='git diff'
 alias gdm='git diff master...HEAD'
 alias glm='git log -p master..HEAD'
-alias gg='git grep -n '
+# alias gg='git grep --break --heading --line-number'
+alias gg='git grep --line-number'
 alias gpush='git push -u origin HEAD'
+alias gitc='git commit'
+alias r='git reset -p HEAD'
+alias c='git commit'
+alias cfile='gcmfile'
+alias gita='git add -p'
+alias a='git add -p'
+alias gitu='git checkout -p --'
+alias u='git checkout -p --'
+alias uall='git checkout -- .'
+alias co='git checkout'
+alias show='git show'
+alias pick='git cherry-pick'
+
 alias glstag='git log --tags --simplify-by-decoration --pretty="format:%ci %d" | sort -r | less'
-alias grebase='gmaster && git checkout - && git rebase master'
 alias gamend='git commit --amend --no-edit'
-alias gm='git checkout master'
+# alias gm='git checkout master'
 alias gfo='git fetch origin && [ `git rev-parse --abbrev-ref HEAD` == "master" ] && gmr || git fetch . origin/master:master'
 alias gmr='git merge --ff-only @{u}'
-alias gmaster='git checkout master && git fetch origin && git merge --ff-only @{u}'
+alias gmaster='git checkout $(default_branch) && git fetch origin && git merge --ff-only @{u}'
+alias grebase='gmaster && git checkout - && git rebase $(default_branch)'
+# alias gmaster='git fetch origin && git checkout origin/master'
+# alias grebase='gmaster && git checkout - && git rebase origin/master'
 alias src='source ~/.bashrc'
 alias alembicc='alembic -c ~/Projects/Angaza/alembic.ini '
 alias alembichistory='alembicc history | less'
@@ -522,6 +545,31 @@ alias listgroups='cd ~/Projects/Angaza/payg-deploy && fab group_list_all:product
 alias demoserve='envdir ../variables.aws/ envdir ../variables.demo/ za-serve-gunicorn za.blueprints.admin:/raw za.blueprints.biz_api_internal:/api za.blueprints.biz_api_external:/data --workers 2'
 alias zapsqldemo='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI="postgres:///za_demo" envdir ../variables.aws/ za-psql -u system@angaza.com'
 alias followerserve='ensure_follower && DATABASE_URI=$ZA_FOLLOWER_DATABASE_URL za-serve-gunicorn za.blueprints.biz_api_internal:/api --workers 2 --timeout 120'
+alias grsdkclean='./gradlew terminalsdk:internal:models:clean terminalsdk:external:clean terminalsdk:internal:common:clean terminalsdk:core:clean terminalsdk:cots:clean terminalsdk:handoffclient:clean terminalsdk:default:clean terminalapp:application:clean'
+# alias grsdkpublish='./gradlew terminalsdk:internal:models:publishToMavenLocal -PVERSION_NAME=SNAPSHOT && ./gradlew terminalsdk:external:publishToMavenLocal -PVERSION_NAME=SNAPSHOT && ./gradlew terminalsdk:internal:common:publishToMavenLocal -PVERSION_NAME=SNAPSHOT && ./gradlew terminalsdk:core:publishToMavenLocal -PVERSION_NAME=SNAPSHOT && ./gradlew terminalsdk:cots:publishToMavenLocal -PVERSION_NAME=SNAPSHOT && ./gradlew terminalsdk:handoffclient:publishToMavenLocal -PVERSION_NAME=SNAPSHOT && ./gradlew terminalsdk:default:publishToMavenLocal -PVERSION_NAME=SNAPSHOT'
+alias grappbuild='./gradlew :terminalapp:application:assembleDebug'
+# alias watchci='type watchci; ensure_sc2fa && watch -n 30 -e -c /Users/billfinn/dot-files/bin/pay_ci_passed.py $(git rev-parse HEAD)'
+
+watchci()
+{
+  if [ "$#" -gt 0 ]; then
+    REF=$1
+  else
+    REF=$(git rev-parse HEAD)
+  fi
+  ensure_sc2fa && watch -n 30 -e -c /Users/billfinn/dot-files/bin/pay_ci_passed.py $REF
+}
+ensure_sc2fa()
+{
+  sc-2fa test
+  if ! [[ $? -eq 0 ]]; then
+    sc-2fa
+  fi
+  sc-2fa test
+  if ! [[ $? -eq 0 ]]; then
+    return 1
+  fi
+}
 watchdb()
 {
   watch $'psql -c "select pid,client_addr,client_port as port,substr(query_start::varchar, 1, 18),substr(query, 1, 50),substr(state, 1, 7),substr((now()-query_start)::varchar, 1, 8) as duration from pg_stat_activity where state != \'idle\' order by query_start;" '"$1"' '
