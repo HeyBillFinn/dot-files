@@ -75,6 +75,10 @@ phe()
   fi
 }
 
+mov_to_gif() {
+  ffmpeg -i $1 -pix_fmt rgb24 $1.gif
+}
+
 __fzf_persistent_history__() (
   local cmd
   # XXX: Currently requires `vipe` and `sponge` of `moreutils`.
