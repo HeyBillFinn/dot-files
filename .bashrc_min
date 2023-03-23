@@ -601,8 +601,9 @@ celeryprod()
 if [ -d "$HOME/bin" ] ; then
     PATH="$HOME/bin:$PATH"
 fi
-shopt -s autocd
-export CDPATH=.:~:~/Projects/Angaza
+PATH="$PATH:~/dot-files/bin"
+# shopt -s autocd
+# export CDPATH=.:~:~/stripe
 
 unregistered_unit()
 {
