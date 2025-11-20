@@ -56,6 +56,8 @@ nmap - O<esc>
 nmap _ o<esc>
 
 syntax on
+" Fix slow cursor movement in ts files
+set re=0
 colorscheme darkblue
 
 set expandtab
@@ -143,3 +145,19 @@ nnoremap <silent> ,[
 
 set laststatus=2
 set colorcolumn=80
+function! LuhnChecksumDigit(str) abort
+  let reverse = join(reverse(split(a:str, '\zs')), '')
+  let sum = 0
+  for i in range(len(reverse))
+    let digit = reverse[i] + 0
+    if i % 2 == 0
+      let digit = digit * 2
+      if digit > 9
+        let digit = digit - 9
+      endif
+    endif
+    let sum = sum + digit
+  endfor
+  let remainder = sum % 10
+  return remainder == 0 ? 0 : 10 - remainder
+endfunction

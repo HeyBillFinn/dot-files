@@ -8,62 +8,40 @@ import sys
 from collections import defaultdict
 
 
-# gh pr view --json number -q .number
-def parse_table(ascii_table):
-    header = []
-    data = []
-    for line in ascii_table:
-        if "-+-" in line:
-            continue
-        if not header:
-            header = list(filter(lambda x: x != "|", line.split()))
-            continue
-        splitted_line = list(filter(lambda x: x != "|", line.split()))
-        assert len(splitted_line) == len(header)
-        datum = {}
-        for i in range(len(splitted_line)):
-            datum[header[i]] = splitted_line[i]
-        data.append(datum)
-    return data
-
-
-ref = sys.argv[1]
+pr_number = sys.argv[1]
+subprocess.run(
+    ["git", "fetch", "origin"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+)
+subprocess.run(
+    ["git", "fetch", ".", "origin/master:master"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+)
+# git log master --pretty="format:commit %H%nAuthor: %an <%ae> | Date: %ad | Summary: %B%n"
 result = subprocess.run(
-    ["pay", "ci:status", "--ref", ref], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    ["git", "log", "master", "--pretty='format:commit %H%nAuthor: %an <%ae> | Date: %ad | Summary: %B%n'", "-n", "10"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
 )
 stdout = result.stdout.decode("utf-8")
-# if "Two-Factor Authentication Required" in stdout:
-#     subprocess.run(["sc-2fa"])
-print(stdout)
-jobs = parse_table(
-    list(itertools.dropwhile(lambda l: "-+-" not in l, stdout.splitlines()))
-)
+commits = stdout.split("commit ")
+most_recent_merges = dict()
+for commit in commits:
+    lines = commit.splitlines()
+    if len(lines) < 2:
+        continue
+    commit_summary = lines[1]
+    print(commit_summary)
+    url_line = next(l for l in lines if "https://git.corp.stripe.com/stripe-internal/android/pull/" in l)
+    commit_summary_number = re.sub(r".*?(\d+)\)$", r"\1", commit_summary)
+    url_line_number = re.sub(r".*?(\d+)\)$", r"\1", url_line)
+    if (url_line_number != commit_summary_number):
+        print(f"Encountered mismatched numbers: {url_line_number} and {commit_summary_number}; adding both")
+        most_recent_merges[url_line_number] = commit_summary
+        most_recent_merges[commit_summary_number] = commit_summary
+        continue
+    most_recent_merges[commit_summary_number] = commit_summary
 
-unique_jobs = list(set([j["Job"] for j in jobs]))
-job_statuses = defaultdict(list)
-for j in jobs:
-    if "PASSED" in j["Status"]:
-        result = "PASSED"
-    elif "FAILED" in j["Status"]:
-        result = "FAILED"
-    else:
-        result = "STARTED"
-    job_statuses[j["Job"]].append(result)
+print("\n".join(most_recent_merges.values()))
+if pr_number in most_recent_merges.keys():
+    subprocess.run(["say", "merged"])
+    subprocess.run(["osascript", "-e", 'display notification "Merged"'])
+    sys.exit(1)
 
-any_in_progress = False
-for (job, statuses) in job_statuses.items():
-    if all([s == "FAILED" for s in statuses]):
-        subprocess.run(["say", "failed"])
-        subprocess.run(["osascript", "-e", 'display notification "Failed"'])
-        sys.exit(1)
-    elif any([s == "STARTED" for s in statuses]):
-        any_in_progress = True
-
-if any_in_progress:
-    sys.exit(0)
-
-# Everything must have passed
-subprocess.run(["say", "passed"])
-subprocess.run(["osascript", "-e", 'display notification "Passed"'])
-sys.exit(1)
-
+sys.exit(0)

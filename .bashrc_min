@@ -142,7 +142,11 @@ explode_aar() {
   echo $TMP_DIR/classes
 }
 
+alias pbapplypatch='pbpaste | git apply -p0 --reject'
+alias kmpcisend='./scripts/kmp/ci_send.sh'
 alias scrcpyreader='scrcpy -s $(reader_device)'
+alias scrcpys10='scrcpy -s $S10_ADB_DEVICE_ID'
+alias scrcpypixel10='scrcpy -s $PIXEL_10_ADB_DEVICE_ID'
 
 alias readerforceuninstall='export ANDROID_SERIAL=$(reader_device); python3 ./scripts/device-owner/force-uninstall.py'
 alias readerbypassappinstallenabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control.sh bypassAppInstall true && echo success'
@@ -150,6 +154,110 @@ alias readerbypassappinstalldisabled='export ANDROID_SERIAL=$(reader_device); ./
 alias readersetupdatesdisabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control-check.sh setUpdatesEnabled false && echo SUCCESS'
 alias readersetupdatesenabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control-check.sh setUpdatesEnabled true && echo SUCCESS'
 
+
+create_devbox() {
+    local branch_suffix=''
+    local repo='pay-server'  # Default value
+    local prompt=''
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --branch-suffix)
+                branch_suffix="$2"
+                shift 2
+                ;;
+            --repo)
+                repo="$2"
+                shift 2
+                ;;
+            --prompt)
+                prompt="$2"
+                shift 2
+                ;;
+            *)
+                echo "Unknown option: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    # Validate required inputs
+    if [[ -z "$branch_suffix" ]]; then
+        echo "Error: branch-suffix and prompt are required."
+        return 1
+    fi
+
+    if [[ -n "$prompt" ]]; then
+      prompt_cli="--prompt \"$prompt\""
+    else
+      prompt_cli=''
+    fi
+
+    # Set up variables
+    local DATE=$(date +%Y%m%d)
+    local branch="$USER/$DATE-$branch_suffix"
+    local devboxname="$USER-$DATE-$branch_suffix"
+
+    # Construct the command as an array to preserve argument boundaries
+    local cmd=(pay remote new "$devboxname" --repo "$repo:$branch" --no-open-code --notify-on-ready --skip-confirm)
+
+    if [[ -n "$prompt" ]]; then
+      cmd+=(--prompt "$prompt")
+    fi
+
+    echo "${cmd[@]}"
+    "${cmd[@]}"
+    # # Construct and execute command
+    # cmd="pay remote new $devboxname --repo $repo:$branch --no-open-code --notify-on-ready --skip-confirm $prompt_cli"
+    # echo $cmd
+    # $cmd
+}
+
+# Completion function for create_devbox
+_create_devbox_completions() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    opts="--branch-suffix --repo --prompt"
+
+    # Function to check if an option has already been used
+    option_used() {
+        local opt="$1"
+        for ((i=1; i < COMP_CWORD; i++)); do
+            if [[ "${COMP_WORDS[i]}" == "$opt" ]]; then
+                return 0
+            fi
+        done
+        return 1
+    }
+
+    # Filter out already used options
+    local available_opts=()
+    for opt in $opts; do
+        if ! option_used "$opt"; then
+            available_opts+=("$opt")
+        fi
+    done
+
+    if [[ ${cur} == --* ]] ; then
+        COMPREPLY=( $(compgen -W "${available_opts[*]}" -- ${cur}) )
+        return 0
+    fi
+
+    case "${prev}" in
+        --branch-suffix|--repo|--prompt)
+            # You can add specific completions for these options if needed
+            COMPREPLY=()
+            ;;
+        *)
+            COMPREPLY=( $(compgen -W "${available_opts[*]}" -- ${cur}) )
+            ;;
+    esac
+}
+
+complete -F _create_devbox_completions create_devbox
 
 alias remotessh='pay remote ssh'
 
@@ -385,8 +493,20 @@ _adbreaderpid() {
   adbreader shell ps | grep com.stripe.reader | tr -s "[:space:]" ' ' | cut -d' ' -f2
 }
 
+_adbs10testapppid() {
+  adbs10 shell ps | grep com.stripe.terminal.testapp | tr -s "[:space:]" ' ' | cut -d' ' -f2
+}
+
 _adbupdaterpid() {
   adbreader shell ps | grep com.stripe.updater | tr -s "[:space:]" ' ' | cut -d' ' -f2
+}
+
+_adbstandalonepid() {
+  adbreader shell ps | grep com.stripe.standalone.app | tr -s "[:space:]" ' ' | cut -d' ' -f2
+}
+
+_adbtestapppid() {
+  adb shell ps | grep com.stripe.terminal.testapp | tr -s "[:space:]" ' ' | cut -d' ' -f2
 }
 
 alias adblogcatclear='adbreader logcat -c'
@@ -400,13 +520,35 @@ adblogcattransaction() {
 
 adblogcats10() {
   type adblogcats10
-  adbs10 shell "logcat | grep --line-buffered -E 'class=|asdf'" | tee "logcat_s10_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+  export ANDROID_SERIAL=$S10_ADB_DEVICE_ID
+  TEST_APP_PID=$(_adbs10testapppid)
+  adb shell "logcat | grep --line-buffered -E ' $TEST_APP_PID '" | tee "logcat_s10_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
 }
+
+teedatetxtfile() {
+  local ts
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  if [ $# -gt 0 ]; then
+    # first arg appended to generated file base
+    tee "logcat_${ts}_$1.txt"
+  else
+    tee "logcat_${ts}.txt"
+  fi
+}
+
 adblogcatverbose() {
   READER_PID=$(_adbreaderpid)
   UPDATER_PID=$(_adbupdaterpid)
-  type adblogcattransaction
-  adbreader shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID ' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / com.stripe.reader /; s/ $UPDATER_PID / com.stripe.updater /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+  STANDALONE_PID=$(_adbstandalonepid)
+  # Build the grep pattern conditionally
+  GREP_PATTERN=" $READER_PID|$UPDATER_PID"
+  if [[ -n $STANDALONE_PID ]]; then
+    GREP_PATTERN+="|$STANDALONE_PID"
+  fi
+  type adblogcatverbose
+  adbreader shell "logcat | grep --line-buffered -E '$GREP_PATTERN' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / reader     /; s/ $UPDATER_PID / updater    /; $( [[ -n $STANDALONE_PID ]] && echo "s/ $STANDALONE_PID / standalone /" )" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+
+  #adbreader shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID|$STANDALONE_PID ' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / reader     /; s/ $UPDATER_PID / updater    /; s/ $STANDALONE_PID / standalone /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
 }
 
 lesslatestlogcat() {
@@ -432,10 +574,21 @@ gdm() {
   git diff "$comparisonBranch"...HEAD
 }
 
+gfbandopenpr() {
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+    return 1
+  fi
+  gfb "$1"
+  # shellcheck disable=SC2119
+  openpr
+}
+
 openpr()
 {
   if [ "$#" -gt 1 ]; then
     echo "Illegal number of parameters"
+    return 1
   fi
   if [ "$#" -gt 0 ]; then
     baseBranch=$1
@@ -443,18 +596,12 @@ openpr()
     baseBranch=$(default_branch)
   fi
 
-  # Determine the comparison branch
-  if [ "$baseBranch" = "master" ] && git ls-remote --exit-code --heads origin master-passing-tests &>/dev/null; then
-    comparisonBranch="master-passing-tests"
-    echo "Using master-passing-tests as comparison branch for commit log"
-  else
-    comparisonBranch="$baseBranch"
-  fi
-
   echo "fetching...$baseBranch"
-  #git fetch . "origin/$baseBranch:$baseBranch"
   git fetch origin "$baseBranch"
-  git fetch origin "$comparisonBranch"
+
+  # Determine the comparison branch
+  comparisonBranch=$(git merge-base "origin/$baseBranch" HEAD)
+
   tmpFile=$(mktemp)
   echo "Temp filename: $tmpFile"
   cp .github/PULL_REQUEST_TEMPLATE.md "$tmpFile"
@@ -463,13 +610,15 @@ openpr()
   $sed_cmd -i '1s;^;PR Title\n\n;' "$tmpFile"
   delimiter="<-- Lines below this will not be included in the PR description -->"
 
-  gitCommits=$(git log --pretty=format:"Commit: %H%nAuthor:%an%nDate:%ad%n%n%s%n%n%b" origin/$comparisonBranch..HEAD)
+  gitCommits=$(git log --pretty=format:"Commit: %H%nAuthor:%an%nDate:%ad%n%n%s%n%n%b" $comparisonBranch..HEAD)
   printf '\n%s\n' "$delimiter" >> "$tmpFile"
   printf '%s\n' "$gitCommits" >> "$tmpFile"
 
   # Remove all trailing whitespace
   $sed_cmd -i 's/[ \t]*$//' "$tmpFile"
   # Disable auto-comment formatting
+
+  sayready write_pr
   vim -c "set formatoptions-=cro | call AddStripes()" "$tmpFile"
   vimExitCode=$?
   if ! [[ $vimExitCode -eq 0 ]]; then
@@ -767,6 +916,15 @@ setsecretkey() {
   fi
 }
 
+setpaymentintentid() {
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    PAYMENT_INTENT_ID="$1"
+    export PAYMENT_INTENT_ID
+  fi
+}
+
 setconfigurationid() {
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
@@ -794,6 +952,11 @@ setreaderid() {
   fi
 }
 
+curlaccountget() {
+  curl_output=$(curl -s "https://api.stripe.com/v1/account" -u "$SECRET_KEY":)
+  echo "$curl_output"
+  echo "$curl_output" | jq .id
+}
 alias stripelistenwebhooks='stripe listen --forward-to localhost:8000/webhook'
 alias curllocationslist='type curllocationslist; curl -s "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY": | jq -r -c '"'"'.data[] | [.display_name, .id]'"'"''
 alias curllocationslisttest='type curllocationslisttest; curl -s "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY": | jq -r -c '"'"'.data[] | select((.display_name | contains("test")) or (.display_name | contains("Home"))) | [.display_name, .id]'"'"''
@@ -832,6 +995,14 @@ curlfileget() {
   echo "$curl_output" | tee file.svg
 }
 
+curllocationsget() {
+  curl -s "https://api.stripe.com/v1/terminal/locations/$LOCATION_ID" -u "$SECRET_KEY":
+}
+
+curllocationssetconfigoverride() {
+  curl -s "https://api.stripe.com/v1/terminal/locations/$LOCATION_ID" -u "$SECRET_KEY": -d configuration_overrides="$1"
+}
+
 curlreadercreatesimulated() {
   output=$(curl -s "https://api.stripe.com/v1/terminal/readers" -u "$SECRET_KEY": -d "location=$LOCATION_ID" -d registration_code=simulated-wpe)
   echo "$output"
@@ -843,12 +1014,31 @@ curlreaderdelete() {
   curl -s -X DELETE "https://api.stripe.com/v1/terminal/readers/$1" -u "$SECRET_KEY":
 }
 
+curlreadergetwithconnectiontoken() {
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+    return 1
+  fi
+  CONNECTION_TOKEN=$(curl -s -X POST https://api.stripe.com/v1/terminal/connection_tokens -u "$SECRET_KEY": | jq .secret | sed -e 's/"//g')
+  curl "https://api.stripe.com/v1/terminal/readers?serial_number=$1" -u $CONNECTION_TOKEN:
+}
+
 curlreaderlist() {
   if [ "$#" -eq 1 ]; then
     output=$(curl -H "Stripe-Version: 2025-05-28.basil;" -s "https://api.stripe.com/v1/terminal/readers?serial_number=$1" -u "$SECRET_KEY":)
     echo "$output"
     READER_ID=$(echo "$output" | jq -r -c .data[].id)
     export READER_ID
+    LOCATION_ID=$(echo "$output" | jq -r -c .data[].location)
+    export LOCATION_ID
+    echo "Setting location ID: $LOCATION_ID"
+    location_output=$(curllocationsget)
+    config_id=$(echo "$location_output" | jq -r -c '.configuration_overrides // empty')
+    if [ -n "$config_id" ]; then
+      echo "Setting config ID: $config_id"
+      CONFIGURATION_ID="$config_id"
+      export CONFIGURATION_ID
+    fi
   else
     curl -H "Stripe-Version: 2025-05-28.basil;" -s "https://api.stripe.com/v1/terminal/readers?limit=100" -u "$SECRET_KEY":
   fi
@@ -869,16 +1059,37 @@ curlreaderregister() {
   fi
 }
 
-alias curllocationsget='curl -s "https://api.stripe.com/v1/terminal/locations/$LOCATION_ID" -u "$SECRET_KEY":'
+curllocationscreate() {
+  curl_output=$(curl -s https://api.stripe.com/v1/terminal/locations -u "$SECRET_KEY": -d display_name="$(date +%Y%m%d) test location" -d "address[line1]"="354 Oyster Point Blvd" -d "address[city]"="South San Francisco" -d "address[state]"="CA" -d "address[country]"="US" -d "address[postal_code]"="94080")
+  echo "$curl_output"
+  LOCATION_ID=$(echo "$curl_output" | jq -r -c .id)
+  export LOCATION_ID
+  echo "Setting location ID: $LOCATION_ID"
+}
+curllocationsdelete() {
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    curl -s -X DELETE "https://api.stripe.com/v1/terminal/locations/$1" -u "$SECRET_KEY":
+  fi
+}
+
+alias curllocationsclearconfigoverride='curl -s https://api.stripe.com/v1/terminal/locations/$LOCATION_ID -u "$SECRET_KEY": -d configuration_overrides='
+alias curlconfigurationslist='curl -s "https://api.stripe.com/v1/terminal/configurations" -u "$SECRET_KEY":'
 alias curlconfigurationsget='curl -s "https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID" -u "$SECRET_KEY":'
 alias curlconfigurationsgetdefault='curl -s "https://api.stripe.com/v1/terminal/configurations?is_account_default=true" -u "$SECRET_KEY":'
+alias curlconfigurationscreate='curl -s -X POST "https://api.stripe.com/v1/terminal/configurations" -u "$SECRET_KEY":'
 alias curlconfigurationsofflineenable='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "offline[enabled]"=true'
 alias curlconfigurationsofflinedisable='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "offline[enabled]"=false'
 alias curlconfigurationstippingclear='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "tipping"='
 alias curlconfigurationstippingset='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "tipping[usd][fixed_amounts][]"=100   -d "tipping[usd][fixed_amounts][]"=200   -d "tipping[usd][fixed_amounts][]"=300'
 alias curlconfigurationstippingsetsmart='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "tipping[usd][percentages][]"=15   -d "tipping[usd][percentages][]"=20   -d "tipping[usd][percentages][]"=25   -d "tipping[usd][fixed_amounts][]"=100   -d "tipping[usd][fixed_amounts][]"=200   -d "tipping[usd][fixed_amounts][]"=300   -d "tipping[usd][smart_tip_threshold]"=1000 -d "tipping[gbp][percentages][]"=15   -d "tipping[gbp][percentages][]"=20   -d "tipping[gbp][percentages][]"=25   -d "tipping[gbp][fixed_amounts][]"=100   -d "tipping[gbp][fixed_amounts][]"=200   -d "tipping[gbp][fixed_amounts][]"=300   -d "tipping[gbp][smart_tip_threshold]"=1000'
 alias curlconfigurationsstandaloneenable='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "standalone[enabled]"=true -d "standalone[payment_settings][currency]"=usd -d "standalone[payment_settings][payment_method_types][0]"=card_present'
-alias curlconfigurationsstandalonedisable='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "standalone"='
+alias curlconfigurationsstandalonedisable='curl -s https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID -u "$SECRET_KEY": -d "standalone[enabled]"=false'
+alias curlpaymentintentlist='curl -s https://api.stripe.com/v1/payment_intents -u "$SECRET_KEY":'
+alias curlpaymentintentlistrecent='curl -s -X GET https://api.stripe.com/v1/payment_intents -u "$SECRET_KEY": -d created[gt]=$(date -v-15M +%s)'
+alias curlpaymentintentcancel='curl -s -X POST https://api.stripe.com/v1/payment_intents/$PAYMENT_INTENT_ID/cancel -u "$SECRET_KEY":'
+alias curlrefundcreate='curl -s https://api.stripe.com/v1/refunds -u "$SECRET_KEY": -d payment_intent=$PAYMENT_INTENT_ID'
 
 waitforactionsucceeded() {
   while true; do
@@ -966,18 +1177,23 @@ curlreadercollectinputsphone() {
   curl -X POST "https://api.stripe.com/v1/terminal/readers/$READER_ID/collect_inputs" -u "$SECRET_KEY": -H "Stripe-Version: 2025-05-28.basil;" -d "inputs[0][type]"=phone -d "inputs[0][custom_text][title]"="Enter your phone number" -d "inputs[0][custom_text][description]"="We'll text you when your order is ready."
 }
 
+curlpaymentintentget() {
+  curl_output=$(curl -X GET -s "https://api.stripe.com/v1/payment_intents/$PAYMENT_INTENT_ID" -u "$SECRET_KEY:")
+  echo "$curl_output"
+}
+
 curlpaymentintentcapture() {
   extra_args=""
   if [ "$#" -eq 1 ]; then
-    payment_intent_id=$1
+    pi_id=$1
   elif [ "$#" -eq 2 ]; then
-    payment_intent_id=$1
+    pi_id=$1
     extra_args="-d amount_to_capture=$2"
   else
     echo "Illegal number of parameters"
     return 1
   fi
-  curl_output=$(curl -X POST -s "https://api.stripe.com/v1/payment_intents/$payment_intent_id/capture" -u "$SECRET_KEY:"  ${extra_args:+"$extra_args"})
+  curl_output=$(curl -X POST -s "https://api.stripe.com/v1/payment_intents/$pi_id/capture" -u "$SECRET_KEY:"  ${extra_args:+"$extra_args"})
   echo "$curl_output"
 }
 
@@ -1000,8 +1216,20 @@ curlpaymentintentcreate() {
   echo "before"
   pi_output=$(curl -s https://api.stripe.com/v1/payment_intents -u "$SECRET_KEY:" -d amount="$amount" -d currency="$currency" -d "payment_method_types[]"=card_present -d capture_method=manual ${extra_args:+"$extra_args"})
   echo "$pi_output"
-  SIMPLE_PI_ID=$(echo "$pi_output" | jq -r -c .id)
-  export SIMPLE_PI_ID
+  PAYMENT_INTENT_ID=$(echo "$pi_output" | jq -r -c .id)
+  export PAYMENT_INTENT_ID
+}
+
+curlreadercollectwithsurchargenotice() {
+  if [ "$#" -eq 1 ]; then
+    PI_ID="$1"
+  else
+    curlpaymentintentcreate
+    PI_ID="$PAYMENT_INTENT_ID"
+  fi
+  echo "$PI_ID"
+  curl_output=$(curl -H "Stripe-Version: 2024-12-18.acacia;" -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/collect_payment_method" -u "$SECRET_KEY:" -d payment_intent="$PI_ID" --data-urlencode "collect_config[surcharge_notice]"="\$22.66 amount above incl. \$0.66 credit card surcharge. Debit cards pay a total of \$22.00")
+  echo "$curl_output"
 }
 
 curlreadercollect() {
@@ -1009,7 +1237,7 @@ curlreadercollect() {
     PI_ID="$1"
   else
     curlpaymentintentcreate
-    PI_ID="$SIMPLE_PI_ID"
+    PI_ID="$PAYMENT_INTENT_ID"
   fi
   echo "$PI_ID"
   curl_output=$(curl -H "Stripe-Version: 2024-12-18.acacia;" -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/collect_payment_method" -u "$SECRET_KEY:" -d payment_intent="$PI_ID")
@@ -1021,19 +1249,61 @@ curlreaderconfirm() {
     echo "Illegal number of parameters"
     return 1
   fi
-  curl_output=$(curl -H "Stripe-Version: 2024-12-18.acacia;" -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/confirm_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$1")
+  curl_output=$(curl -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/confirm_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$1")
   echo "$curl_output"
 }
 
-curlreaderprocess() {
-  if [ "$#" -eq 1 ]; then
-    PI_ID="$1"
-  else
-    curlreadersimplepayment
-    PI_ID="$SIMPLE_PI_ID"
+curlreaderconfirmwithsurcharge() {
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+    return 1
   fi
-  echo "$PI_ID"
-  curl_output=$(curl -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/process_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$1")
+  curl_output=$(curl -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/confirm_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$1" -d "confirm_config[amount_surcharge]"=21)
+  echo "$curl_output"
+}
+
+# curlreaderprocess() {
+#   if [ "$#" -eq 1 ]; then
+#     PI_ID="$1"
+#   else
+#     curlreadersimplepayment
+#     PI_ID="$PAYMENT_INTENT_ID"
+#   fi
+#   echo "$PI_ID"
+#   curl_output=$(curl -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/process_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$1")
+#   echo "$curl_output"
+# }
+
+curlreaderprocess() {
+  # Usage:
+  # curlreaderprocess [PI_ID] [extra curl args...]
+  #
+  # If PI_ID is omitted, will call curlreadersimplepayment and use $PAYMENT_INTENT_ID
+  # Any additional arguments after PI_ID are passed as extra arguments to curl.
+
+  local PI_ID
+  local EXTRA_ARGS=()
+
+  if [ "$#" -ge 1 ]; then
+    PI_ID="$1"
+    shift
+  fi
+
+  if [ -z "$PI_ID" ]; then
+    curlreadersimplepayment
+    PI_ID="$PAYMENT_INTENT_ID"
+  fi
+
+  # Remaining arguments are passed as-is to curl
+  EXTRA_ARGS=("$@")
+
+  echo "Processing payment_intent ID: $PI_ID"
+
+  curl_output=$(curl -s "https://api.stripe.com/v1/terminal/readers/$READER_ID/process_payment_intent" \
+    -u "$SECRET_KEY:" \
+    -d payment_intent="$PI_ID" \
+    "${EXTRA_ARGS[@]}")
+
   echo "$curl_output"
 }
 
@@ -1048,9 +1318,14 @@ curlreaderpresentpaymentmethod() {
   echo "$curl_output"
 }
 
+curlreadersimplepaymentmoto() {
+  curlpaymentintentcreate 5200 usd '-d  payment_method_types[]=card'
+  curlreaderprocess "$PAYMENT_INTENT_ID" -d "process_config[moto]"=true
+}
+
 curlreadersimplepayment() {
   curlpaymentintentcreate "$@"
-  curlreaderprocess "$SIMPLE_PI_ID"
+  curlreaderprocess "$PAYMENT_INTENT_ID"
 }
 
 curlreadersimplepaymentthencollectinputs() {
@@ -1085,6 +1360,11 @@ saydone() {
   say done win $window "$@" exit code $exitCode
 }
 
+sayready() {
+  window=$(tmux display-message -p -F '#{window_index}' -t "$TMUX_PANE")
+  say ready win "$window" "$@"
+}
+
 appstart() {
   if [ "$#" -gt 0 ]; then
     ADB_ARGS="-s $1"
@@ -1095,6 +1375,7 @@ appstart() {
   $CMD
 }
 export S10_ADB_DEVICE_ID="RF8N41V8P0T"
+export PIXEL_10_ADB_DEVICE_ID="57260DLCR000FJ"
 
 gradletest() {
   # Get the title of the first Android Studio window
@@ -1130,7 +1411,8 @@ gradletest() {
   fi
 
   # Generate the Gradle command
-  gradle_command="./gradlew --configuration-cache $module_path:testDebugUnitTest --tests \"*$file_name\""
+  gradle_command="./gradlew --configuration-cache $module_path:testDebugUnitTest"
+  # gradle_command="./gradlew --configuration-cache $module_path:testDebugUnitTest --tests \"*$file_name\""
 
   # Print the command
   echo "Generated Gradle command:"
@@ -1153,16 +1435,18 @@ alias appinstallhandoff='type appinstallhandoff; ./gradlew --configuration-cache
 alias adbinstallapp='adbinstallhandoff && appstart'
 alias appassemble='type appassemble; ./gradlew --configuration-cache :terminalapp:application:assembleDebug; saydone assemble_debug'
 alias appinstalls10='type appinstalls10; adbs10 install -t ./terminalapp/application/build/outputs/apk/debug/application-debug.apk && appstart $S10_ADB_DEVICE_ID; saydone app_install_s10'
-alias javaapprun='./gradlew :terminal-java-app:application:run'
+alias javaapprun='type javaapprun; ./gradlew --configuration-cache :terminal-java-app:application:run'
 alias rmmvnlocal='rm -rvf ~/.m2/repository/com/stripe/stripeterminal*'
 alias rmgradlesnapshots="find ~/.gradle/caches/ -name '*stripe*SNAPSHOT' -exec rm -rvf {} \\;"
 alias adbpixel3='adb -s 8C9X1L79K'
 alias adbs10='adb -s $S10_ADB_DEVICE_ID'
+alias adbpixel10='adb -s $PIXEL_10_ADB_DEVICE_ID'
 
 alias adbreinstallapp='type adbreinstallapp; adbinstallhandoff && adb shell am start -n com.stripe.terminal.testapp/.MainActivity'
 # alias adbbuildapp='type adbbuildapp; ./gradlew :terminalapp:application:assembleDebug && adbreinstallapp'
 
 
+alias readerreinstalllatest='type readerreinstalllatest; APK_ROOT_DIR=$(find /Users/billfinn/stripe/reader-apks/ -maxdepth 1 -type d | grep "2\.[0-9][0-9]" | sort | tail -n 1); echo $APK_ROOT_DIR; adbreader install -t $APK_ROOT_DIR/com.stripe.updater-bbpos-debug.apk && adbreader install -t $APK_ROOT_DIR/com.stripe.reader-bbpos-debug.apk'
 alias readerreinstallapp='type readerreinstallapp; adbreader install -t ./terminalapp/application/build/outputs/apk/debug/application-debug.apk && adbreader shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone installing_app'
 alias readerreinstallreader='type readerreinstallreader; adbreader install ./reader/application/build/outputs/apk/bbpos/debug/com.stripe.reader-bbpos-debug.apk; saydone installing_reader'
 alias readerreinstallupdater='type readerreinstallupdater; adbreader install ./updater/application/build/outputs/apk/bbpos/debug/com.stripe.updater-bbpos-debug.apk; saydone installing_updater'

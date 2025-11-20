@@ -5,6 +5,10 @@ filetype off                   " required!
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
 "Plugin 'Vimjas/vim-python-pep8-indent'
+
+" Terraform syntax highlighting
+Plugin 'sheerun/vim-polyglot'
+Plugin 'udalov/kotlin-vim'
 Plugin 'FooSoft/vim-argwrap'
 Plugin 'VundleVim/Vundle.vim'
 Plugin 'scrooloose/nerdtree'
@@ -36,12 +40,25 @@ nnoremap <c-k> :GitGutterPrevHunk<cr>
 " Help gitgutter refresh faster
 set updatetime=500
 
+nnoremap ,s :call CtrlPKotlin()<cr>
 nnoremap ,b :CtrlPBuffer<cr>
 nnoremap ,w :CtrlPCurWD<cr>
 nnoremap ,c :CtrlPClearCache<cr>
+let g:ctrlp_max_files = 0
+
+" Kotlin files
+" \v^%(.*\.kt|.*build\.gradle\.kts)@!.*$
+" \v^.*\.%(kt)@!.*$
+function CtrlPKotlin()
+  let g:ctrlp_custom_ignore = {
+    \   'dir': '\v[\/](dist|\.git|build|node_modules)$',
+    \   'file': '\v^%(.*\.kt|.*build\.gradle\.kts)@!.*$',
+    \ }
+endfunction
+
 let g:ctrlp_custom_ignore = {
   \   'dir': '\v[\/](dist|\.git|build|node_modules)$',
-  \   'file': '\v\.(exe|so|dll|class|apk|pyc|bin|dex|jar|png|prepreed.c|obfuscated.c|obfmap|o)$',
+  \   'file': '\v\.(png|exe|so|dll|class|apk|pyc|bin|dex|jar|png|prepreed.c|obfuscated.c|obfmap|o)$',
   \ }
 "Auto-open NerdTree for empty vim session
 "autocmd vimenter * if !argc() | NERDTree | endif
@@ -114,4 +131,4 @@ let g:ale_ruby_rubocop_executable = 'bundle'
 "       \ "mode": "passive",
 "       \ "active_filetypes": [],
 "       \ "passive_filetypes": [] }
-set statusline=%<%f\ %h%m%r\ %1*%{TagInStatusLine()}%*%=%-14.(%l,%c%V%)\ %P
+"set statusline=%<%f\ %h%m%r\ %1*%{TagInStatusLine()}%*%=%-14.(%l,%c%V%)\ %P

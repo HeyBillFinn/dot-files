@@ -122,8 +122,8 @@ done
 
 append_command_to_file ~/.inputrc "set editing-mode vi"
 
-append_command_to_file ~/.zshrc "export PATH=$current_directory/bin/:\$PATH"
-append_command_to_file ~/.bashrc "export PATH=$current_directory/bin/:\$PATH"
+# append_command_to_file ~/.zshrc "export PATH=$current_directory/bin/:\$PATH"
+# append_command_to_file ~/.bashrc "export PATH=$current_directory/bin/:\$PATH"
 # Sourcing the virtual env should be last, please
 if [ $FULL -eq 1 ]; then
   append_command_to_file ~/.bashrc "source ~/local/venv/bin/activate"

@@ -3,12 +3,11 @@ import json
 import subprocess
 
 
-
 def add_all_for_team(members, team_handle):
     team = json.loads(
         subprocess.check_output(
             f"sc-curl -s https://home.corp.stripe.com/api/teams/{team_handle}?expand=members,children",
-            shell=True
+            shell=True,
         )
     )
     if "error" in team:
@@ -30,7 +29,12 @@ def add_members_for_child_teams(members, team):
 
 
 members = []
-# add_all_for_team(members, "terminal-parent")
-add_all_for_team(members, "terminal")
+add_all_for_team(members, "terminal-eng")
+# add_all_for_team(members, "terminal-payment-and-commerce-experience")
+product_members = []
+add_all_for_team(product_members, "terminal-product-management")
 sorted_members = sorted(list(set(members)))
+sorted_product_members = sorted(list(set(product_members)))
 print("\n".join(sorted_members))
+print("")
+print("\n".join(sorted_product_members))
