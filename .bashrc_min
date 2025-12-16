@@ -371,22 +371,32 @@ default_branch() {
 
 setreaders710() {
   export PREFERRED_READER="f4c941aa"
+  _current_reader=$(reader_device)
+  export ANDROID_SERIAL=$_current_reader
 }
 
 setreaders700() {
   export PREFERRED_READER="4f64d47b"
+  _current_reader=$(reader_device)
+  export ANDROID_SERIAL=$_current_reader
 }
 
 setreaders700devkit() {
   export PREFERRED_READER="1234567"
+  _current_reader=$(reader_device)
+  export ANDROID_SERIAL=$_current_reader
 }
 
 setreaderwpe() {
   export PREFERRED_READER="f85e6a55"
+  _current_reader=$(reader_device)
+  export ANDROID_SERIAL=$_current_reader
 }
 
 setreaderverifone() {
   export PREFERRED_READER="452-406-077"
+  _current_reader=$(reader_device)
+  export ANDROID_SERIAL=$_current_reader
 }
 
 whichreader() {
@@ -485,28 +495,20 @@ reader_device() {
 #   fi
 # }
 
-_adbtestapppid() {
-  adbs10 shell ps | grep com.stripe.terminal.testapp | tr -s "[:space:]" ' ' | cut -d' ' -f2
-}
-
 _adbreaderpid() {
-  adbreader shell ps | grep com.stripe.reader | tr -s "[:space:]" ' ' | cut -d' ' -f2
-}
-
-_adbs10testapppid() {
-  adbs10 shell ps | grep com.stripe.terminal.testapp | tr -s "[:space:]" ' ' | cut -d' ' -f2
-}
-
-_adbupdaterpid() {
-  adbreader shell ps | grep com.stripe.updater | tr -s "[:space:]" ' ' | cut -d' ' -f2
-}
-
-_adbstandalonepid() {
-  adbreader shell ps | grep com.stripe.standalone.app | tr -s "[:space:]" ' ' | cut -d' ' -f2
+  adb shell ps | grep com.stripe.reader | tr -s "[:space:]" ' ' | cut -d' ' -f2
 }
 
 _adbtestapppid() {
   adb shell ps | grep com.stripe.terminal.testapp | tr -s "[:space:]" ' ' | cut -d' ' -f2
+}
+
+_adbupdaterpid() {
+  adb shell ps | grep com.stripe.updater | tr -s "[:space:]" ' ' | cut -d' ' -f2
+}
+
+_adbstandalonepid() {
+  adb shell ps | grep com.stripe.standalone.app | tr -s "[:space:]" ' ' | cut -d' ' -f2
 }
 
 alias adblogcatclear='adbreader logcat -c'
@@ -518,11 +520,92 @@ adblogcattransaction() {
   adbreader shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID ' | grep --line-buffered -E 'class=|asdf' | grep --line-buffered -E 'CollectReusableCardOp|CollectPaymentMethodOp|ResumeCollectPaymentMethodOp|SetReaderDisplayOp|TransactionCoordinator|TransactionViewModel.*onTransactionStateSummaryUpdate|DefaultScreenDurationLogger|BbposControllerListener|HardwareService.*BbposSdkService|BbposDeviceControllerImpl|PaymentCollectionCoordinator|PaymentCollectionStateMachine|BbposPaymentCollectionListener|FormNavigationFragment|BbposPaymentCollector|EndPreviousTransactionPrerequisiteFactory|PollingCommandLogger|SetReaderDisplayComponentHealthLogger|asdf'" | sed -u "s/ $READER_PID / com.stripe.reader /; s/ $UPDATER_PID / com.stripe.updater /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
 }
 
-adblogcats10() {
-  type adblogcats10
-  export ANDROID_SERIAL=$S10_ADB_DEVICE_ID
-  TEST_APP_PID=$(_adbs10testapppid)
-  adb shell "logcat | grep --line-buffered -E ' $TEST_APP_PID '" | tee "logcat_s10_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+append_pid() {
+  local pid=$1
+  if [[ -n $pid ]]; then
+    if [[ -z $PID_LIST ]]; then
+      PID_LIST=$pid
+    else
+      PID_LIST="$PID_LIST|$pid"
+    fi
+  fi
+}
+
+# adblogcat() {
+#   type adblogcat
+#   READER_PID=$(_adbreaderpid)
+#   UPDATER_PID=$(_adbupdaterpid)
+#   STANDALONE_PID=$(_adbstandalonepid)
+#   TEST_APP_PID=$(_adbtestapppid)
+# 
+#   # Build pipe-delimited pattern from non-empty PIDs
+#   PID_LIST=""
+#   for pid in "$READER_PID" "$UPDATER_PID" "$STANDALONE_PID" "$TEST_APP_PID"; do
+#     if [[ -n $pid ]]; then
+#       if [[ -z $PID_LIST ]]; then
+#         PID_LIST=$pid
+#       else
+#         PID_LIST="$PID_LIST|$pid"
+#       fi
+#     fi
+#   done
+# 
+#   # If no PIDs found, exit or handle as desired
+#   if [[ -z $PID_LIST ]]; then
+#     echo "No PIDs found." >&2
+#     return 1
+#   fi
+# 
+#   # Surround with spaces so pattern matches PIDs as separate tokens in log lines
+#   # Use grep -E with --line-buffered for streaming
+#   adb shell "logcat | grep --line-buffered -E ' (${PID_LIST}) '" | tee "logcat_$(date -u +"%Y_%m_%dT%H_%M_%SZ").txt"
+# }
+
+adblogcat() {
+  type adblogcat
+  READER_PID=$(_adbreaderpid)
+  UPDATER_PID=$(_adbupdaterpid)
+  STANDALONE_PID=$(_adbstandalonepid)
+  TEST_APP_PID=$(_adbtestapppid)
+
+  declare -a pids=()
+  declare -a labels=()
+
+  [[ -n $READER_PID ]]     && { pids+=("$READER_PID");     labels+=("<reader PID>"); }
+  [[ -n $UPDATER_PID ]]    && { pids+=("$UPDATER_PID");    labels+=("<updater PID>"); }
+  [[ -n $STANDALONE_PID ]] && { pids+=("$STANDALONE_PID"); labels+=("<standalone PID>"); }
+  [[ -n $TEST_APP_PID ]]   && { pids+=("$TEST_APP_PID");   labels+=("<test-app PID>"); }
+
+  if [[ ${#pids[@]} -eq 0 ]]; then
+    echo "No PIDs found." >&2
+    return 1
+  fi
+
+  # Build grep alternation (no escaping)
+  GREP_ALT=""
+  for pid in "${pids[@]}"; do
+    if [[ -z $GREP_ALT ]]; then
+      GREP_ALT=$pid
+    else
+      GREP_ALT="$GREP_ALT|$pid"
+    fi
+  done
+
+  # Build sed script to replace each PID when matched as a whole token.
+  SED_SCRIPT=""
+  for i in "${!pids[@]}"; do
+    pid=${pids[i]}
+    label=${labels[i]}
+    # No escaping of pid or label (assumed safe)
+    SED_SCRIPT="$SED_SCRIPT;s/ $pid / $label /g"
+  done
+  SED_SCRIPT=${SED_SCRIPT#;}
+
+  TIMESTAMP=$(date -u +"%Y_%m_%dT%H_%M_%SZ")
+  adb shell "logcat" \
+    | grep --line-buffered -E "($GREP_ALT)" \
+    | gsed --unbuffered -E "$SED_SCRIPT" \
+    | tee "logcat_${TIMESTAMP}.txt"
 }
 
 teedatetxtfile() {
@@ -565,13 +648,15 @@ lesslatestlogcat() {
 
 gdm() {
   baseBranch=$(default_branch)
-  if [ "$baseBranch" = "master" ] && git ls-remote --exit-code --heads origin master-passing-tests &>/dev/null; then
-    git fetch origin master-passing-tests
-    comparisonBranch="origin/master-passing-tests"
-  else
-    comparisonBranch="$baseBranch"
-  fi
-  git diff "$comparisonBranch"...HEAD
+  # 2025-12-02 I don't know why I was doing this.
+  # if [ "$baseBranch" = "master" ] && git ls-remote --exit-code --heads origin master-passing-tests &>/dev/null; then
+  #   git fetch origin master-passing-tests
+  #   comparisonBranch="origin/master-passing-tests"
+  # else
+  #   comparisonBranch="$baseBranch"
+  # fi
+  # git diff "$comparisonBranch"...HEAD
+  git diff "$baseBranch"...HEAD
 }
 
 gfbandopenpr() {
@@ -596,8 +681,11 @@ openpr()
     baseBranch=$(default_branch)
   fi
 
-  echo "fetching...$baseBranch"
-  git fetch origin "$baseBranch"
+  current_folder=$(basename "$PWD")
+  if [[ "$current_folder" != "android" ]]; then
+    echo "fetching...$baseBranch"
+    git fetch origin "$baseBranch"
+  fi
 
   # Determine the comparison branch
   comparisonBranch=$(git merge-base "origin/$baseBranch" HEAD)
@@ -1043,6 +1131,7 @@ curlreaderlist() {
     curl -H "Stripe-Version: 2025-05-28.basil;" -s "https://api.stripe.com/v1/terminal/readers?limit=100" -u "$SECRET_KEY":
   fi
 }
+
 curlreaderget() {
   curl -H "Stripe-Version: 2025-05-28.basil;" -s "https://api.stripe.com/v1/terminal/readers/$READER_ID" -u "$SECRET_KEY":
 }
@@ -1056,6 +1145,16 @@ curlreaderregister() {
     echo "$output"
     READER_ID=$(echo "$output" | jq -r -c .id)
     export READER_ID
+    LOCATION_ID=$(echo "$output" | jq -r -c .location)
+    export LOCATION_ID
+    echo "Setting location ID: $LOCATION_ID"
+    location_output=$(curllocationsget)
+    config_id=$(echo "$location_output" | jq -r -c '.configuration_overrides // empty')
+    if [ -n "$config_id" ]; then
+      echo "Setting config ID: $config_id"
+      CONFIGURATION_ID="$config_id"
+      export CONFIGURATION_ID
+    fi
   fi
 }
 
@@ -1362,7 +1461,7 @@ saydone() {
 
 sayready() {
   window=$(tmux display-message -p -F '#{window_index}' -t "$TMUX_PANE")
-  say ready win "$window" "$@"
+  say ready win "$window" "$@" > /dev/null 2>&1 &
 }
 
 appstart() {
@@ -1488,6 +1587,7 @@ alias gd='git diff --no-prefix'
 alias d='git diff'
 alias glm='git log -p $(default_branch)..HEAD'
 alias glbf='git log -p --author=billfinn'
+alias glp='git log -p --follow'
 # alias gg='git grep --break --heading --line-number'
 alias gg='git grep --line-number'
 alias gpush='git push -u origin HEAD'

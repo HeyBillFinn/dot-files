@@ -89,39 +89,32 @@ def is_branch_merged(branch):
 
 print(run_command(["git", "checkout", "master"]))
 
-# Merged branches with ~normal rebase history
-merged_branches = run_command(["git", "branch", "--merged"])
-branches_to_prune = [
-    b
-    for b in map(str.strip, merged_branches.split("\n"))
-    if b != "" and not re.search("^\*", b) and not "master" == b
-]
 deleted_branches = []
-for branch in branches_to_prune:
+# Remove tmp branches
+for branch in [b for b in get_branches() if b.startswith("tmp-") and "billfinn" in b]:
     delete_branch(branch)
     deleted_branches.append(branch)
 
-# Iterating over all local branches
-branches = get_branches()
-for branch in branches:
-    print(f"Checking branch {branch}")
-    if "master" == branch:
-        continue
-    if not "billfinn" in branch:
-        print("not billfinn branch")
-        if confirm_and_delete_branch(branch):
-            deleted_branches.append(branch)
-    elif re.search("^tmp-", branch):
-        print("tmp branch; deleting")
-        delete_branch(branch)
-        deleted_branches.append(branch)
-    elif is_branch_merged(branch):
-        # Merged branches with abnormal rebase history
-        if confirm_and_delete_branch(branch):
-            deleted_branches.append(branch)
-
-
-print("Merged branches:\n{}".format(merged_branches))
+# # Iterating over all local branches
+# branches = get_branches()
+# for branch in branches:
+#     print(f"Checking branch {branch}")
+#     if "master" == branch:
+#         continue
+#     if not "billfinn" in branch:
+#         print("not billfinn branch")
+#         if confirm_and_delete_branch(branch):
+#             deleted_branches.append(branch)
+#     elif re.search("^tmp-", branch):
+#         print("tmp branch; deleting")
+#         delete_branch(branch)
+#         deleted_branches.append(branch)
+#     elif is_branch_merged(branch):
+#         # Merged branches with abnormal rebase history
+#         if confirm_and_delete_branch(branch):
+#             deleted_branches.append(branch)
+#
+#
 print("Deleted the following branches:\n{}\n".format(deleted_branches))
 
 # Prune from origin

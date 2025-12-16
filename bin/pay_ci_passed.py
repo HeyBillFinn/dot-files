@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 from collections import defaultdict, OrderedDict
@@ -15,8 +16,51 @@ from datetime import datetime, timedelta
 
 IGNORED_JOB_FAILURES = ["android-ios-kmp"]
 
+# Track if we've already triggered a rebuild for android-ios-kmp
+android_kmp_rebuild_triggered = False
+android_kmp_rebuild_thread = None
+
 class BuildNotAvailableYet(Exception):
     pass
+
+
+def handle_android_kmp_rebuild(build_id):
+    """
+    Thread function to handle android-ios-kmp rebuild.
+    First runs ./scripts/kmp/ci_send.sh, then triggers a rebuild.
+    """
+    try:
+        print(f"\n[android-ios-kmp] Running ./scripts/kmp/ci_send.sh...")
+        result = subprocess.run(
+            ["./scripts/kmp/ci_send.sh"],
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            print(f"[android-ios-kmp] ci_send.sh failed with return code {result.returncode}")
+            print(f"[android-ios-kmp] stderr: {result.stderr}")
+            return
+
+        print(f"[android-ios-kmp] ci_send.sh completed successfully")
+
+        # Now trigger the rebuild
+        print(f"[android-ios-kmp] Triggering rebuild for build {build_id}...")
+        rebuild_result = subprocess.run(
+            ["sc-curl", "-X", "POST", f"https://cibot.corp.stripe.com/builds/{build_id}/rebuild"],
+            capture_output=True,
+            text=True,
+        )
+
+        if rebuild_result.returncode != 0:
+            print(f"[android-ios-kmp] Rebuild failed with return code {rebuild_result.returncode}")
+            print(f"[android-ios-kmp] stderr: {rebuild_result.stderr}")
+            return
+
+        print(f"[android-ios-kmp] Rebuild triggered successfully for {build_id}")
+
+    except Exception as e:
+        print(f"[android-ios-kmp] Error during rebuild process: {e}")
 
 
 def get_tmux_window_number():
@@ -160,18 +204,43 @@ def filter_and_print_jobs(jobs):
 
 def handle_git_sha(ref):
     result = subprocess.run(
-        ["pay", "ci:status", "--ref", ref],
+        ["sc-curl", "-s", f"cibot.corp.stripe.com/user/build_groups?stripe_user=billfinn&limit=50"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
     stdout = result.stdout.decode("utf-8")
-    # if "Two-Factor Authentication Required" in stdout:
-    #     subprocess.run(["sc-2fa"])
-    # print(stdout)
-    jobs = parse_table(
-        list(itertools.dropwhile(lambda l: "-+-" not in l, stdout.splitlines()))
-    )
-    return jobs
+    try:
+        build_groups = json.loads(stdout)["build_groups"]
+    except Exception as e:
+        print(f"Error reading from json: {e}\n\nstdout:\n{stdout}")
+        raise e
+    build_groups = [bg for bg in build_groups if bg["commit_id"] == ref]
+    if len(build_groups) == 0:
+        print(f"No build groups matching ${ref}")
+        raise BuildNotAvailableYet()
+
+    # Infer the branch by the oldest timestamp
+    oldest_build_group = min(build_groups, key=lambda bg: bg["build_submitted_at"])
+    branch = oldest_build_group["branch"]
+    print(f"Detected branch {branch}")
+    build_groups = [bg for bg in build_groups if bg["branch"] == branch]
+    all_jobs = []
+    for build_group in build_groups:
+        all_jobs += handle_build_group(build_group["token"])
+    return all_jobs
+    # result = subprocess.run(
+    #     ["pay", "ci:status", "--ref", ref],
+    #     stdout=subprocess.PIPE,
+    #     stderr=subprocess.STDOUT,
+    # )
+    # stdout = result.stdout.decode("utf-8")
+    # # if "Two-Factor Authentication Required" in stdout:
+    # #     subprocess.run(["sc-2fa"])
+    # # print(stdout)
+    # jobs = parse_table(
+    #     list(itertools.dropwhile(lambda l: "-+-" not in l, stdout.splitlines()))
+    # )
+    # return jobs
 
 
 def decorate_status(status):
@@ -202,6 +271,7 @@ def convert_build_to_job(now, raw_build):
         "Status": decorate_status(raw_build["status"]),
         "Duration": str(td),
         "Link": raw_build["public_url"],
+        "BuildID": raw_build.get("token", ""),
     }
 
 
@@ -236,6 +306,8 @@ def handle_build_group(ref):
 
 
 def main(ref, force_wait):
+    global android_kmp_rebuild_triggered, android_kmp_rebuild_thread
+
     try:
         if ref.startswith("bg_"):
             jobs = handle_build_group(ref)
@@ -254,6 +326,7 @@ def main(ref, force_wait):
         return
 
     job_statuses = defaultdict(list)
+    job_build_ids = {}
     for j in jobs:
         if "PASSED" in j["Status"]:
             result = "PASSED"
@@ -264,6 +337,31 @@ def main(ref, force_wait):
         else:
             result = "STARTED"
         job_statuses[j["Job"]].append(result)
+        # Store build ID for each job (keep the last one if multiple)
+        if "BuildID" in j:
+            job_build_ids[j["Job"]] = j["BuildID"]
+
+    # Check for android-ios-kmp failure and trigger rebuild if needed
+    if "android-ios-kmp" in job_statuses:
+        kmp_statuses = job_statuses["android-ios-kmp"]
+        if all([s == "FAILED" for s in kmp_statuses]) and not android_kmp_rebuild_triggered:
+            android_kmp_rebuild_triggered = True
+            build_id = job_build_ids.get("android-ios-kmp", "")
+            if build_id:
+                print(f"\n[android-ios-kmp] Job failed, triggering rebuild process in background...")
+                android_kmp_rebuild_thread = threading.Thread(
+                    target=handle_android_kmp_rebuild,
+                    args=(build_id,),
+                    daemon=False
+                )
+                android_kmp_rebuild_thread.start()
+            else:
+                print("[android-ios-kmp] Job failed but no build ID found")
+
+    # Check if rebuild thread is still running
+    if android_kmp_rebuild_thread and android_kmp_rebuild_thread.is_alive():
+        print("[android-ios-kmp] Rebuild process still running, continuing to monitor...")
+        return
 
     any_in_progress = False
     failed_jobs = []
