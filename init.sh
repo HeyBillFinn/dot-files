@@ -17,3 +17,6 @@ ln -sf /Users/billfinn/dot-files/.tmux_min.conf ~/.tmux.conf
 
 # Update ~/.bashrc, so it sources dot-files.bashrc
 # [ -f ~/dot-files/.bashrc ] && source ~/dot-files/.bashrc
+
+# brew install tmux
+# brew install fzf

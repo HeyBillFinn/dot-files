@@ -1,6 +1,7 @@
 # Don't merge
 set -o vi
 export EDITOR=nvim
+alias vim=nvim
 
 unameOut="$(uname -s)"
 case "${unameOut}" in
@@ -111,21 +112,32 @@ mov_to_gif_small() {
   ffmpeg -i "$1" -pix_fmt rgb24 -filter:v "fps=10,scale=480:-1:flags=lanczos,setpts=PTS/1.5" "$1.gif"
 }
 
-# awk -F "|" '"'"'{print $4}'"'"'
-# sed 's/[^|]*|[^|]*|[^|]*|[[:space:]]*//'
-__fzf_persistent_history__() (
-  local cmd
-  # XXX: Currently requires `vipe` and `sponge` of `moreutils`.
-  tac $PERSISTENT_HISTORY_FILE | \
+__fzf_persistent_history__() {
+  local selection
+  selection=$(tac $PERSISTENT_HISTORY_FILE | \
     fzf --tiebreak=index -d '\|' -n '4..' \
-    --bind 'enter:execute(export FZF_CMD=$(echo {} | sed "s/[^|]*|[^|]*|[^|]*|[[:space:]]*//"); echo "$FZF_CMD")+abort,ctrl-v:execute(export FZF_CMD=$(echo {} | awk -F "|" '"'"'{print $4}'"'"'); echo $FZF_CMD | vipe)+abort,ctrl-d:execute(export FIRST_THREE_COLS=$(echo {} | cut -d "|" -f1-3); export OUT_FILENAME=$(echo ~/dot-files/$(date -u -Iseconds)_bkp.persistent_history); cp ~/dot-files/.persistent_history $OUT_FILENAME && grep -v -a -F "$FIRST_THREE_COLS" ~/dot-files/.persistent_history | sponge ~/dot-files/.persistent_history)+abort'
-)
+    --bind 'ctrl-v:execute(echo {} | awk -F "|" '"'"'{print $4}'"'"' > /tmp/fzf_cmd_edit.txt; nvim </dev/tty >/dev/tty 2>&1 /tmp/fzf_cmd_edit.txt; echo $? > /tmp/fzf_nvim_exit_code)+accept')
+
+  if [[ -f /tmp/fzf_nvim_exit_code ]]; then
+    local exit_code=$(cat /tmp/fzf_nvim_exit_code)
+    rm /tmp/fzf_nvim_exit_code
+    if [[ $exit_code -eq 0 ]]; then
+      cat /tmp/fzf_cmd_edit.txt
+      rm /tmp/fzf_cmd_edit.txt
+    else
+      rm -f /tmp/fzf_cmd_edit.txt
+      echo ""
+    fi
+  else
+    echo "$selection" | sed "s/[^|]*|[^|]*|[^|]*|[[:space:]]*//";
+  fi
+}
 # Heavily inspired from ~/.fzf/shell/key-bindings.bash
 bind '"\C-x\C-a": vi-movement-mode'
 bind '"\C-x\C-e": shell-expand-line'
 bind '"\C-x\C-r": redraw-current-line'
 bind '"\C-x^": history-expand-line'
-bind '"\C-p": "\C-x\C-addi`__fzf_persistent_history__`\C-x\C-e\C-x\C-r\C-x^\C-x\C-a$a\n"'
+bind '"\C-p": "\C-x\C-addi`__fzf_persistent_history__`\C-x\C-e\C-x\C-r\C-x^\C-x\C-a$a\C-m"'
 
 sed_command() {
   if [[ $machine == 'Mac' ]]; then
@@ -1615,10 +1627,6 @@ alias grebase='gfetchdefaultbranch && git rebase $(default_branch)'
 # alias gmain='git fetch origin && git checkout origin/master'
 # alias grebase='gmain && git checkout - && git rebase origin/master'
 alias src='source ~/.bashrc'
-alias alembicc='alembic -c ~/Projects/Angaza/alembic.ini '
-alias alembichistory='alembicc history | less'
-alias alembichead='alembicc upgrade head'
-alias sandboxdemodb='export ZA_SANDBOX_DEMO_DATABASE_URI=`envdir ~/Projects/Angaza/variables.aws summon --ignore-all -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e sandbox -D ENV=sandbox-demo printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
 alias sandboxstagingdb='export ZA_SANDBOX_STAGING_DATABASE_URI=`envdir ~/Projects/Angaza/variables.aws summon --ignore-all -f ~/Projects/Angaza/payg-backend/za/secrets.yml -e sandbox -D ENV=sandbox-staging printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
 alias proddb='export ZA_PROD_DATABASE_URI=`cd payg-deploy > /dev/null && summon -e PRODUCTION printenv | grep "^DATABASE_URI=" | cut -d "=" -f 2`'
 alias analyticsdb='export ZA_ANALYTICS_DATABASE_URL=`envdir ~/Projects/Angaza/variables.aws summon -f ~/Projects/Angaza/payg-backend/buildkite/periodic-tasks/check-follower-lag-secrets.yml printenv | grep "^ANALYTICS_FOLLOWER_DATABASE_URL=" | cut -d "=" -f 2`'
@@ -1632,8 +1640,6 @@ alias ensure_biz_internal_instance='export ZA_BIZ_INTERNAL_INSTANCE=`cd payg-dep
 # alias ensure_internal_biz_instance='export ZA_BIZ_INSTANCE=`ec2-host | grep production__biz- | sed "s/\(.*\)\s\+\(.*\)/\2/g"`'
 #alias sshprod='ec2-ssh `fab group_list_all | grep production__biz | cut -d '"'"' '"'"' -f 1`'
 alias sshprod='ec2-ssh `fab group_list_all:production | grep "^production__biz" | awk "{print $1}"`'
-alias alembicbranchpoint='AL_HISTORY=`alembic history` && AL_BR_REVISION=`echo "$AL_HISTORY" | grep "(branchpoint)" | awk '"'"'{print $3}'"'"'` && echo "branchpoint: $AL_BR_REVISION" && echo "$AL_HISTORY" | grep -C 1 "^$AL_BR_REVISION\|(head)"'
-alias f8='flake8 --show-source --config=flake8.ini za'
 alias vssh='vagrant ssh'
 alias celerydemo='celery purge -f && AWS_ACCESS_KEY_ID=`cat ~/Projects/Angaza/variables.deploy/AWS_ACCESS_KEY_ID` AWS_SECRET_ACCESS_KEY=`cat ~/Projects/Angaza/variables.deploy/AWS_SECRET_ACCESS_KEY` DATABASE_URI=postgres:///za_sandbox celery --app=za worker --loglevel=INFO --concurrency=1 -Q celery,batch 2>&1 | tee ~/celery.log'
 alias celeryprodbeat='ZA_CELERY_BROKER_URL=amqp://guest@localhost:5672 DATABASE_URI=postgres:///za_prod_snapshot celery --app=za beat --loglevel=INFO'
@@ -1778,166 +1784,13 @@ pathadd /Users/billfinn/stripe/android/dotnet/.dotnet
 # shopt -s autocd
 # export CDPATH=.:~:~/stripe
 
-unregistered_unit()
-{
-  psql -d za_prod_snapshot -c "select default_account_number from units u left outer join accounts a on a.attached_unit_id=u.id where u.type='$1' and a.id is null order by u.id desc limit 10"
-}
-sshbill()
-{
-  if [[ -z "${ZA_BILL_INSTANCE}" ]]; then
-    ensure_bill
-  fi
-  ssh -A ubuntu@$ZA_BILL_INSTANCE
-}
-sshbatch()
-{
-  if [[ -z "${ZA_BATCH_INSTANCE}" ]]; then
-    ensure_batch_instance
-  fi
-  ssh -A ubuntu@$ZA_BATCH_INSTANCE
-}
-scpbill()
-{
-  if [[ -z "${ZA_BILL_INSTANCE}" ]]; then
-    ensure_bill
-  fi
-  scp $1 ubuntu@$ZA_BILL_INSTANCE:
-}
 kill_gradle () {
   ./gradlew --stop
   jps | awk '/(GradleDaemon|KotlinCompileDaemon)/ { system("kill -9 "$1) }'
 }
+
 safekill()
 {
   pgrep -a $1
   killall -i $1
-}
-ensure_sandbox_demo()
-{
-  if [[ -z "${ZA_SANDBOX_DEMO_DATABASE_URI}" ]]; then
-    sandboxdemodb
-  fi
-}
-ensure_sandbox_staging()
-{
-  if [[ -z "${ZA_SANDBOX_STAGING_DATABASE_URI}" ]]; then
-    sandboxstagingdb
-  fi
-}
-ensure_production()
-{
-  if [[ -z "${ZA_PROD_DATABASE_URI}" ]]; then
-    proddb
-  fi
-}
-ensure_follower()
-{
-  if [[ -z "${ZA_FOLLOWER_DATABASE_URL}" ]]; then
-    followerdb
-  fi
-}
-ensure_export_follower()
-{
-  if [[ -z "${ZA_EXPORT_FOLLOWER_DATABASE_URL}" ]]; then
-    exportdb
-  fi
-}
-sql_statements()
-{
-  TRACE_ID="$1"
-  CWD="$PWD"
-  pushd ~/Projects/Angaza/payg-deploy
-  envdir ~/Projects/Angaza/variables.deploy summon -e redshift psql -c 'select ''"time",duration,culprit,statement,parameters from sql_queries where trace_id='"'""$TRACE_ID""'" > "$CWD/$TRACE_ID.txt"
-  popd
-}
-ensure_puce()
-{
-  if [[ -z "${ZA_PUCE_DATABASE_URL}" ]]; then
-    export ZA_PUCE_DATABASE_URL=`cd payg-deploy > /dev/null && summon -e heroku_admin heroku config:get HEROKU_POSTGRESQL_PUCE_URL --app angaza-production`
-  fi
-}
-ensure_heybillfinndb()
-{
-  if [[ -z "${ZA_HEYBILLFINN_FORK_URL}" ]]; then
-    heybillfinndb
-  fi
-}
-with_follower()
-{
-  ensure_follower
-  psql -d $ZA_FOLLOWER_DATABASE_URL -c "$1"
-}
-snapshot_report_configs()
-{
-  with_follower "select o.id,o.name,src.created_when,src.factory_name,src.frequency from snapshot_report_configs src inner join organizations o on src.organization_id=o.id order by o.name"
-}
-orgs()
-{
-  with_follower "select o.id,name,tier,default_operating_country as country,sms_sender_text,preferred_sms_router_id as router_id from organizations o $* order by name"
-}
-subscriptions()
-{
-  with_follower "select pp.id,o.name, pp.component, pp.price_point_id, pp.component_handle, uo.name as usage_org_name from subscription_billable_component_price_points pp inner join subscriptions s on pp.subscription_id=s.id inner join organizations o on s.organization_id=o.id inner join price_point_organization_associations ppoa on pp.id = ppoa.price_point_id inner join organizations uo on uo.id=ppoa.usage_organization_id order by o.name, pp.component"
-}
-products()
-{
-  with_follower "select id,name,type from products order by name"
-}
-agent_app_versions()
-{
-  with_follower "select o.name,aav.version_code,aav.requires_upgrade from organizations o inner join agent_app_versions aav on o.agent_app_version_id = aav.id order by o.name"
-}
-org_rels()
-{
-  with_follower "select p.name as parent, p.id as p_id, c.name as child, c.id as c_id from organization_organization_associations ooa inner join organizations p on ooa.parent_organization_id=p.id inner join organizations c on ooa.child_organization_id=c.id where p.name != 'Angaza' order by p.name,c.name"
-}
-users()
-{
-  with_follower "select u.id,u.created_when,username,o.name,substr(r.name, 1, 10),u.archived as ar,u.interface_locale as locale  from users u inner join organizations o on u.organization_id=o.id inner join roles r on u.role_id=r.id order by username"
-}
-roles()
-{
-  with_follower "select o.name,r.id,r.name from roles r inner join organizations o on r.organization_id=o.id order by o.name;"
-}
-roles_with_permissions()
-{
-  with_follower "select o.name,r.name,pd.title,p.is_enabled from permissions p inner join roles r on p.role_id=r.id inner join organizations o on r.organization_id=o.id inner join permission_descriptions pd on p.description_id=pd.id order by o.name,pd.title;"
-}
-groups()
-{
-  with_follower "select id,name from groups"
-}
-portals()
-{
-  with_follower "select o.name,o.id as org_id,p.id as portal_id,p.type,p.is_enabled,p.is_visible,p.reference_validation,p.remittance_detector,p.merchant_account from portals p inner join organizations o on p.organization_id=o.id order by o.name"
-}
-export_targets()
-{
-  with_follower "select et.id,et.type,o.name,etd.db_url,etd.schema,eth.* from export_targets et left outer join export_targets_http eth on et.id=eth.id left outer join export_targets_bigquery etb on et.id=etb.id left outer join export_targets_database etd on et.id=etd.id left outer join organizations o on exists(select 1 from export_report_configs erc where erc.export_target_id=et.id and erc.organization_id=o.id) order by et.id"
-}
-export_report_statuses()
-{
-  with_follower "select substr(ers.scheduled_when::varchar, 1, 16) as sched,substr(ers.started_when::varchar, 1, 16) as started,substring(ers.completed_when::varchar, 1, 16) as completed,ers.state,ers.size,erc.report_config_type,substr(erc.incremental_updated_when::varchar, 1, 16) as incr,erc.frequency,et.type, erc.organization_id as org_id from export_report_statuses ers inner join export_report_configs erc on ers.export_report_config_id=erc.id inner join export_targets et on erc.export_target_id=et.id where ers.scheduled_when > now() - '3 days'::interval order by ers.scheduled_when desc;"
-}
-export_report_configs()
-{
-  # with_follower "select erc.id,substr(erc.created_when::varchar, 1, 16) as created_when,substr(erc.frequency, 1, 10) as freq,substr(o.name, 1, 30) as org_name,erc.id,erc.report_config_type,et.type,erc.is_enabled as e,substr(erc.incremental_updated_when::varchar, 1, 10) as when,erc.table_reporter_kwargs,erc.db_kwargs,erc.report_kwargs from export_report_configs erc inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id order by o.name"
-  with_follower "select erc.id,substr(erc.created_when::varchar, 1, 10) as created,substr(erc.frequency, 1, 10) as freq,substr(o.name, 1, 30) as org_name,erc.report_config_type,et.type,erc.is_enabled as e,substr(erc.incremental_updated_when::varchar, 1, 16) as when from export_report_configs erc inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id order by o.name"
-}
-failed_export_report_statuses()
-{
-  with_follower "select ers.scheduled_when,ers.state,ers.trace_id,erc.report_config_type,erc.frequency,o.name,et.type from export_report_statuses ers inner join export_report_configs erc on ers.export_report_config_id = erc.id inner join organizations o on erc.organization_id=o.id inner join export_targets et on erc.export_target_id=et.id where ers.state in ('FAILED', 'ABANDONED') and ers.scheduled_when > now() - '7 days'::interval order by ers.scheduled_when desc"
-}
-sms_default_templates()
-{
-  with_follower "select st.type,stc.role,stc.is_enabled as e,stc.type,stcpe.start_after,stcpe.repeat_every,stcpe.stop_after,stcpre.waits_until from sms_templates st inner join sms_template_configs stc on st.config_id=stc.id left outer join sms_template_configs_post_event stcpe on stc.id=stcpe.id left outer join sms_template_configs_pre_event stcpre on stc.id=stcpre.id where st.type = 'DEFAULT' order by stc.role;"
-}
-sms_delivery()
-{
-  echo $1
-  with_follower "select sm.organization_id,sr.type,sm.state,count(sm.id) from sms_messages sm inner join sms_routers sr on sm.router_id=sr.id where sm.recipient like '+$1%' and sm.created_when > now() - '1 hour'::interval group by 1,2,3 order by 1,2,3;"
-}
-sms_seq_routers()
-{
-  with_follower "select srr.sequential_router_id as seq_id, srr.position as pos,sr.route,srrs.type,srrs.id as srrs_id,sr.id as sr_id,sr.description,round(sr.probability, 3) from sms_routers_routes srr inner join sms_routes sr on srr.route_id=sr.id inner join sms_routers srrs on sr.router_id=srrs.id order by srr.sequential_router_id,srr.position;"
 }
