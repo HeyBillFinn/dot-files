@@ -85,7 +85,7 @@ mov_to_webm_small() {
 }
 
 mov_to_webm() {
-  ffmpeg -i "$1" -an -filter:v "scale=800:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2,setpts=PTS/1.5" -c:v libvpx-vp9 -crf 23 "$1.webm"
+  ffmpeg -nostats -i "$1" -an -filter:v "scale=800:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2,setpts=PTS/1.5" -c:v libvpx-vp9 -crf 23 "$1.webm"
 }
 
 mov_to_small() {
@@ -154,7 +154,8 @@ explode_aar() {
   echo $TMP_DIR/classes
 }
 
-alias pbapplypatch='pbpaste | git apply -p0 --reject'
+alias pbapply='pbpaste | git apply -p0 --reject'
+alias pbapplyghdiff='pbpaste | awk 1 | git apply --reject'
 alias kmpcisend='./scripts/kmp/ci_send.sh'
 alias scrcpyreader='scrcpy -s $(reader_device)'
 alias scrcpys10='scrcpy -s $S10_ADB_DEVICE_ID'
@@ -405,7 +406,13 @@ setreaderwpe() {
   export ANDROID_SERIAL=$_current_reader
 }
 
-setreaderverifone() {
+setreaderv660pA13() {
+  export PREFERRED_READER="713-363-464"
+  _current_reader=$(reader_device)
+  export ANDROID_SERIAL=$_current_reader
+}
+
+setreaderv660pA10() {
   export PREFERRED_READER="452-406-077"
   _current_reader=$(reader_device)
   export ANDROID_SERIAL=$_current_reader
@@ -521,6 +528,90 @@ _adbupdaterpid() {
 
 _adbstandalonepid() {
   adb shell ps | grep com.stripe.standalone.app | tr -s "[:space:]" ' ' | cut -d' ' -f2
+}
+type_slowly() {
+    text="$1"
+    consecutive_fast=0
+
+    for (( i=0; i<${#text}; i++ )); do
+        char="${text:$i:1}"
+        if [ "$char" == " " ]; then
+            adb shell input text "%s"
+        else
+            adb shell input text "$char"
+        fi
+
+        # Simulate typing bursts: fast typing followed by pauses
+        if [ $consecutive_fast -gt 5 ]; then
+            # After typing 5-8 chars quickly, take a break
+            delay=$((250 + RANDOM % 350))  # 250-600ms pause
+            consecutive_fast=0
+        else
+            # Normal typing speed with variation
+            delay=$((0))   # 70-200ms
+            consecutive_fast=$((consecutive_fast + 1))
+        fi
+
+        # # Occasional random longer pause (hesitation)
+        # if [ $((RANDOM % 15)) -eq 0 ]; then
+        #     delay=$((400 + RANDOM % 400))  # 400-800ms
+        # fi
+
+        echo $delay
+        printf -v delay_sec "0.%03d" "$delay"
+        #sleep "$delay_sec"
+    done
+}
+
+type_in_chunks() {
+    text="$1"
+    chunk_size_min=1
+    chunk_size_max=3
+
+    i=0
+    while [ $i -lt ${#text} ]; do
+        # Random chunk size between 2-5 characters
+        chunk_size=$((chunk_size_min + RANDOM % (chunk_size_max - chunk_size_min + 1)))
+
+        # Extract chunk
+        chunk="${text:$i:$chunk_size}"
+
+        # Replace spaces with %s for adb
+        chunk="${chunk// /%s}"
+
+        # Send chunk
+        adb shell input text "$chunk"
+
+        # Random delay between chunks: 50-150ms
+        delay=$((0 + RANDOM % 101))
+        printf -v delay_sec "0.%03d" "$delay"
+        sleep "$delay_sec"
+
+        i=$((i + chunk_size))
+    done
+}
+
+type_foo() {
+  adb shell << 'EOF'
+  text='billfinn@stripe.com'
+  len=${#text}
+
+  for i in $(seq 0 $((len - 1))); do
+      char=$(echo "$text" | cut -c$((i+1)))
+
+      if [ "$char" = " " ]; then
+          input text '%s'
+      else
+          input text "$char"
+      fi
+
+      # Random delay between 100-180ms
+      delay=$((RANDOM % 80 + 100))
+
+      # Convert to seconds (e.g., 120 -> 0.120)
+      #sleep 0.0${delay}
+  done
+EOF
 }
 
 alias adblogcatclear='adbreader logcat -c'
@@ -646,6 +737,10 @@ adblogcatverbose() {
   #adbreader shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID|$STANDALONE_PID ' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / reader     /; s/ $UPDATER_PID / updater    /; s/ $STANDALONE_PID / standalone /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
 }
 
+taillatestlogcat() {
+  latest_logcat=$(ls -1 logcat_* | tail -n 1)
+  tail -f $latest_logcat
+}
 lesslatestlogcat() {
   latest_logcat=$(ls -1 logcat_* | tail -n 1)
   less $latest_logcat
@@ -681,8 +776,30 @@ gfbandopenpr() {
   openpr
 }
 
-openpr()
-{
+ghprcreate() {
+  if [ "$#" -gt 2 ]; then
+    echo "Illegal number of parameters"
+    return 1
+  fi
+  local filename="$1"
+  if [ "$#" -gt 1 ]; then
+    baseBranch=$2
+  else
+    baseBranch=$(default_branch)
+  fi
+
+  local sed_cmd=$(sed_command)
+
+  title=$(head -n 1 "$filename")
+  echo "Title: $title"
+  # Delete the title and the blank line below the title
+  $sed_cmd -i '1,2d' "$filename"
+
+  hostname=$(git remote get-url origin | sed -e 's/^.*@//' -e 's/:.*//' -e 's/^https:\/\///')
+  GH_HOST="$hostname" gh pr create --body-file "$filename" --title "$title" -B "$baseBranch"
+}
+
+openpr() {
   if [ "$#" -gt 1 ]; then
     echo "Illegal number of parameters"
     return 1
@@ -707,7 +824,7 @@ openpr()
   cp .github/PULL_REQUEST_TEMPLATE.md "$tmpFile"
 
   local sed_cmd=$(sed_command)
-  $sed_cmd -i '1s;^;PR Title\n\n;' "$tmpFile"
+  $sed_cmd -i $'1s;^;PR Title\\n\\n;' "$tmpFile"
   delimiter="<-- Lines below this will not be included in the PR description -->"
 
   gitCommits=$(git log --pretty=format:"Commit: %H%nAuthor:%an%nDate:%ad%n%n%s%n%n%b" $comparisonBranch..HEAD)
@@ -719,7 +836,7 @@ openpr()
   # Disable auto-comment formatting
 
   sayready write_pr
-  vim -c "set formatoptions-=cro | call AddStripes()" "$tmpFile"
+  nvim -c "set formatoptions-=cro | lua require('config.functions').add_stripes()" "$tmpFile"
   vimExitCode=$?
   if ! [[ $vimExitCode -eq 0 ]]; then
     echo "error: vim exit code $vimExitCode"
@@ -741,13 +858,7 @@ openpr()
   # Remove last blank line
   $sed_cmd -i '${/^$/d};' "$tmpFile"
 
-  title=$(head -n 1 "$tmpFile")
-  echo "Title: $title"
-  # Delete the title and the blank line below the title
-  $sed_cmd -i '1,2d' "$tmpFile"
-
-  hostname=$(git remote get-url origin | sed -e 's/^.*@//' -e 's/:.*//' -e 's/^https:\/\///')
-  GH_HOST="$hostname" gh pr create --body-file "$tmpFile" --title "$title" -B "$baseBranch"
+  ghprcreate $tmpFile $baseBranch
 }
 
 disableautomerge()
@@ -776,6 +887,7 @@ automerge()
 alias ghcreateissue='gh issue create --web'
 alias viewpr='gh pr view --web'
 alias mergepr='gh pr merge -m -d'
+alias ghimageupload='gh pr view 19498 --web'
 
 alias ghassignbricandjil='gh pr edit --add-assignee bric-stripe,jil-stripe'
 
@@ -1468,7 +1580,7 @@ curlreadersetupintent() {
 saydone() {
   exitCode=$?
   window=$(tmux display-message -p -F '#{window_index}' -t "$TMUX_PANE")
-  say done win $window "$@" exit code $exitCode
+  say done win $window "$@" exit code $exitCode &
 }
 
 sayready() {
@@ -1530,6 +1642,7 @@ gradletest() {
   echo "$gradle_command"
   $gradle_command
 }
+alias protoassemble='type protoassemble; ./gradlew --configuration-cache :proto:modules:common:assemble :proto:modules:terminal:assemble :proto:modules:source-external:assemble :proto:modules:source-internal:assemble :proto:modules:internal:assemble'
 alias gradleclearconfigurationcache='type gradleclearconfigurationcache; rm -rf .gradle/configuration-cache'
 alias appinstalldebug='type appinstalldebug; ./gradlew --configuration-cache :terminalapp:application:installDebug && adb shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone install debug'
 alias appreinstalldebug='type appreinstalldebug; adb install -t ./terminalapp/application/build/outputs/apk/debug/application-debug.apk && appstart'

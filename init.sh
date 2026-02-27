@@ -20,3 +20,6 @@ ln -sf /Users/billfinn/dot-files/.tmux_min.conf ~/.tmux.conf
 
 # brew install tmux
 # brew install fzf
+# brew install gsed
+# brew install gh
+# brew install scrcpy

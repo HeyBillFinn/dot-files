@@ -24,6 +24,10 @@ class BuildNotAvailableYet(Exception):
     pass
 
 
+class TransientNetworkError(Exception):
+    pass
+
+
 def handle_android_kmp_rebuild(build_id):
     """
     Thread function to handle android-ios-kmp rebuild.
@@ -213,6 +217,8 @@ def handle_git_sha(ref):
         build_groups = json.loads(stdout)["build_groups"]
     except Exception as e:
         print(f"Error reading from json: {e}\n\nstdout:\n{stdout}")
+        if "dial tcp: lookup cibot.corp.stripe.com: no such host" in stdout:
+            raise TransientNetworkError()
         raise e
     build_groups = [bg for bg in build_groups if bg["commit_id"] == ref]
     if len(build_groups) == 0:
@@ -297,7 +303,12 @@ def handle_build_group(ref):
     stdout = result.stdout.decode("utf-8")
     # if "Two-Factor Authentication Required" in stdout:
     #     subprocess.run(["sc-2fa"])
-    raw_builds = json.loads(stdout)["builds"]
+    try:
+        raw_builds = json.loads(stdout)["builds"]
+    except json.decoder.JSONDecodeError:
+        print("error decoding stdout:")
+        print(stdout)
+        raise
     jobs = []
     now = time.time()
     for raw_build in raw_builds:
@@ -317,6 +328,9 @@ def main(ref, force_wait):
             jobs = handle_git_sha(ref)
     except BuildNotAvailableYet:
         print("Build not available yet")
+        return
+    except TransientNetworkError:
+        print("Transient network error")
         return
 
     jobs = filter_and_print_jobs(jobs)
