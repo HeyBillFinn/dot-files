@@ -35,9 +35,8 @@ def get_branches():
 
 def confirm_and_delete_branch(branch):
     while True:
-        print(f"git diff --color master...{branch}")
-        diff = run_command(["git", "diff", "--color", f"master...{branch}"])
-        print(diff)
+        print(f"git log --oneline master..{branch}")
+        subprocess.run(["git", "log", "--oneline", f"master..{branch}"])
         response = input(f"Delete branch '{branch}'? [y/n]: ").lower()
         if response in ["", "y", "yes"]:
             delete_branch(branch)
@@ -49,42 +48,41 @@ def confirm_and_delete_branch(branch):
             print("Invalid input. Please enter 'y' or 'n'.")
 
 
-# https://stackoverflow.com/a/34337939
-def is_branch_merged(branch):
-    # Store the current branch
-    current_branch = run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-    if current_branch is None:
-        print("current branch is None")
+def is_branch_squash_merged(branch, base="master"):
+    """Detect if branch was squash-merged into base.
+
+    Works by creating a temporary commit with the branch's tree on top of the
+    merge base, then using git cherry to check if that patch is already applied
+    upstream. A '-' prefix from git cherry means it's already in base.
+    """
+    merge_base = run_command(["git", "merge-base", base, branch])
+    if not merge_base:
         return False
 
-    # Checkout master~0
-    if run_command(["git", "checkout", "master~0"]) is None:
-        print("current branch is None")
+    tree = run_command(["git", "rev-parse", f"{branch}^{{tree}}"])
+    if not tree:
         return False
 
-    try:
-        # Attempt to merge the branch
-        result = subprocess.run(
-            ["git", "merge", "--no-commit", "--no-ff", branch],
-            capture_output=True,
-            text=True,
-        )
-
-        # Check if there are any differences
-        diff_result = run_command(["git", "diff", "--cached"])
-
-        # Abort the merge
-        run_command(["git", "merge", "--abort"])
-
-        # If there's no difference, the branch is considered merged
-        return diff_result == ""
-
-    except subprocess.CalledProcessError as e:
-        print(f"Error during merge check: {e}")
+    temp_commit = run_command(
+        ["git", "commit-tree", tree, "-p", merge_base, "-m", "temp squash check"]
+    )
+    if not temp_commit:
         return False
-    finally:
-        # Always return to the original branch
-        run_command(["git", "checkout", current_branch])
+
+    result = subprocess.run(
+        ["git", "cherry", base, temp_commit], capture_output=True, text=True
+    )
+    return result.stdout.strip().startswith("-")
+
+
+def is_branch_merged(branch, base="master"):
+    # Fast path: regular merge/rebase (commit is reachable from base)
+    merged = run_command(["git", "branch", "--merged", base])
+    if merged and branch in merged.split():
+        return True
+
+    # Slow path: squash merge (same diff, different commit)
+    return is_branch_squash_merged(branch, base)
 
 
 print(run_command(["git", "checkout", "master"]))
@@ -95,26 +93,15 @@ for branch in [b for b in get_branches() if b.startswith("tmp-") and "billfinn" 
     delete_branch(branch)
     deleted_branches.append(branch)
 
-# # Iterating over all local branches
-# branches = get_branches()
-# for branch in branches:
-#     print(f"Checking branch {branch}")
-#     if "master" == branch:
-#         continue
-#     if not "billfinn" in branch:
-#         print("not billfinn branch")
-#         if confirm_and_delete_branch(branch):
-#             deleted_branches.append(branch)
-#     elif re.search("^tmp-", branch):
-#         print("tmp branch; deleting")
-#         delete_branch(branch)
-#         deleted_branches.append(branch)
-#     elif is_branch_merged(branch):
-#         # Merged branches with abnormal rebase history
-#         if confirm_and_delete_branch(branch):
-#             deleted_branches.append(branch)
-#
-#
+# Iterating over billfinn branches (non-tmp)
+for branch in [b for b in get_branches() if "billfinn" in b and not b.startswith("tmp-")]:
+    print(f"Checking branch {branch}")
+    if is_branch_merged(branch):
+        print(f"Branch appears merged (including squash): {branch}")
+        if confirm_and_delete_branch(branch):
+            deleted_branches.append(branch)
+    else:
+        print(f"Branch not merged, skipping: {branch}")
 print("Deleted the following branches:\n{}\n".format(deleted_branches))
 
 # Prune from origin
