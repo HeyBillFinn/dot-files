@@ -172,7 +172,7 @@ alias clauded='claude --dangerously-skip-permissions'
 
 create_devbox() {
     local branch_suffix=''
-    local repo='pay-server'  # Default value
+    local workspace='pay-server'  # Default value
     local prompt=''
 
     # Parse arguments
@@ -182,8 +182,8 @@ create_devbox() {
                 branch_suffix="$2"
                 shift 2
                 ;;
-            --repo)
-                repo="$2"
+            --workspace)
+                workspace="$2"
                 shift 2
                 ;;
             --prompt)
@@ -199,14 +199,8 @@ create_devbox() {
 
     # Validate required inputs
     if [[ -z "$branch_suffix" ]]; then
-        echo "Error: branch-suffix and prompt are required."
+        echo "Error: --branch-suffix is required."
         return 1
-    fi
-
-    if [[ -n "$prompt" ]]; then
-      prompt_cli="--prompt \"$prompt\""
-    else
-      prompt_cli=''
     fi
 
     # Set up variables
@@ -215,7 +209,7 @@ create_devbox() {
     local devboxname="$USER-$DATE-$branch_suffix"
 
     # Construct the command as an array to preserve argument boundaries
-    local cmd=(pay remote new "$devboxname" --repo "$repo:$branch" --no-open-code --notify-on-ready --skip-confirm)
+    local cmd=(pay remote new "$devboxname" --repo "stripe-internal/mint:$branch" --workspace "$workspace" --ide none --notify-on-ready --skip-confirm)
 
     if [[ -n "$prompt" ]]; then
       cmd+=(--prompt "$prompt")
@@ -223,10 +217,6 @@ create_devbox() {
 
     echo "${cmd[@]}"
     "${cmd[@]}"
-    # # Construct and execute command
-    # cmd="pay remote new $devboxname --repo $repo:$branch --no-open-code --notify-on-ready --skip-confirm $prompt_cli"
-    # echo $cmd
-    # $cmd
 }
 
 # Completion function for create_devbox
@@ -235,7 +225,7 @@ _create_devbox_completions() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="--branch-suffix --repo --prompt"
+    opts="--branch-suffix --workspace --prompt"
 
     # Function to check if an option has already been used
     option_used() {
@@ -262,7 +252,7 @@ _create_devbox_completions() {
     fi
 
     case "${prev}" in
-        --branch-suffix|--repo|--prompt)
+        --branch-suffix|--workspace|--prompt)
             # You can add specific completions for these options if needed
             COMPREPLY=()
             ;;
@@ -918,11 +908,21 @@ automerge()
 }
 
 alias ghcreateissue='gh issue create --web'
-alias viewpr='gh pr view --web'
 alias mergepr='gh pr merge -m -d'
 alias ghimageupload='gh pr view 19498 --web'
 
 alias ghassignbricandjil='gh pr edit --add-assignee bric-stripe,jil-stripe'
+
+viewpr() {
+  if gh pr view --web 2>/dev/null; then
+    return
+  fi
+  local branch
+  branch=$(git branch --show-current)
+  local repo_url
+  repo_url=$(gh browse -n)
+  open "${repo_url}/compare/${branch}?expand=1"
+}
 
 gcob()
 {
