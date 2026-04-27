@@ -9,9 +9,10 @@ Targets S700, S710, and V660P device types. For each deploy group, the script wi
   4. AdvanceProgressiveDeployPlan -> 100%
 
 Usage:
-  ./create_standalone_deploy_plans.py [dav_id]
+  ./create_standalone_deploy_plans.py [dav_id] [--groups NAME [NAME ...]]
 
   If dav_id is omitted, the most recent DAV from the standalone deploy asset is used.
+  If --groups is provided, only those deploy groups are targeted (by DDG ID, e.g. tmddg_...).
 
 Requirements:
   sc-grpcurl, ~/stripe/mint/zoolander checked out
@@ -156,8 +157,23 @@ def main():
     )
     parser.add_argument("dav_id", nargs="?", default=None, help="Device asset version ID (e.g. tmdav_...). If omitted, uses the most recent DAV.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print debug info for gRPC calls")
+    parser.add_argument(
+        "--groups", nargs="+", metavar="DDG_ID",
+        help="Deploy group IDs to target (e.g. tmddg_...). If omitted, uses the default dev internal groups.",
+    )
     args = parser.parse_args()
     verbose = args.verbose
+
+    if args.groups:
+        known = {g.id: g for g in DEV_INTERNAL_GROUPS}
+        groups = []
+        for ddg_id in args.groups:
+            if ddg_id in known:
+                groups.append(known[ddg_id])
+            else:
+                groups.append(DeployGroup(name=ddg_id, id=ddg_id, rollout_plan=[0, 100]))
+    else:
+        groups = DEV_INTERNAL_GROUPS
 
     if args.dav_id:
         dav_id = args.dav_id.strip()
@@ -194,8 +210,8 @@ def main():
     print(f"  Version: {version}")
     print(f"  Title:   {title}")
     print()
-    print(f"  Deploy groups ({len(DEV_INTERNAL_GROUPS)}):")
-    for g in DEV_INTERNAL_GROUPS:
+    print(f"  Deploy groups ({len(groups)}):")
+    for g in groups:
         ddg_url = AMP_DDG_URL.format(g.id)
         print(f"    {g.name:<20}  {g.id}   rollout={g.rollout_plan}")
         print(f"    {'':20}  {ddg_url}")
@@ -215,7 +231,7 @@ def main():
     print()
 
     results = []
-    for group in DEV_INTERNAL_GROUPS:
+    for group in groups:
         print(f"-> {group.name} ({group.id})")
         url = None
         error = None

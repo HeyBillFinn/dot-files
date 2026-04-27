@@ -9,9 +9,13 @@ diff, then prompts:
   [q]uit    — stop reviewing
 
 Usage:
-  ./scripts/review-screenshots.py <snapshot-images-dir>
+  ./scripts/review-screenshots.py [snapshot-images-dir]
+
+If no directory is given, discovers all unstaged .png files and groups them
+into directories automatically.
 
 Example:
+  ./scripts/review-screenshots.py
   ./scripts/review-screenshots.py standalonepos/modules/views/screenshot-tests/src/test/snapshots/images/
 """
 
@@ -19,26 +23,35 @@ import subprocess
 import sys
 
 
-def get_changed_dirs(base_path):
+def get_changed_png_lines(base_path=None):
+    """Get unstaged changed .png file paths from git diff."""
+    cmd = ["git", "diff", "--name-only", "--diff-filter=M", "--", "*.png"]
+    if base_path:
+        cmd = ["git", "diff", "--name-only", "--", base_path]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return [l for l in result.stdout.strip().splitlines() if l]
+
+
+def extract_dir(line):
+    """Extract the grouping directory from a changed file path."""
+    # Extract up to: .../images/<TestClassName>/images/
+    # The path pattern is: <base>/images/<TestClass>/images/<file>.png
+    parts = line.split("/images/")
+    if len(parts) >= 3:
+        return f"{parts[0]}/images/{parts[1]}/images"
+    elif len(parts) >= 2:
+        return f"{parts[0]}/images/{parts[1].split('/')[0]}"
+    else:
+        return line.rsplit("/", 1)[0]
+
+
+def get_changed_dirs(base_path=None):
     """Get unique TestClass/images/ directories that have changed PNGs."""
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "--", base_path],
-        capture_output=True,
-        text=True,
-    )
+    lines = get_changed_png_lines(base_path)
     seen = set()
     dirs = []
-    for line in result.stdout.strip().splitlines():
-        # Extract up to: .../images/<TestClassName>/images/
-        # The path pattern is: <base>/images/<TestClass>/images/<file>.png
-        parts = line.split("/images/")
-        if len(parts) >= 3:
-            dir_path = f"{parts[0]}/images/{parts[1]}/images"
-        elif len(parts) >= 2:
-            dir_path = f"{parts[0]}/images/{parts[1].split('/')[0]}"
-        else:
-            dir_path = line.rsplit("/", 1)[0]
-
+    for line in lines:
+        dir_path = extract_dir(line)
         if dir_path not in seen:
             seen.add(dir_path)
             dirs.append(dir_path)
@@ -56,8 +69,7 @@ def count_files(directory):
 
 
 def main():
-    default_dir = "standalonepos/modules/views/screenshot-tests/src/test/snapshots/images/"
-    base_path = sys.argv[1] if len(sys.argv) >= 2 else default_dir
+    base_path = sys.argv[1] if len(sys.argv) >= 2 else None
     dirs = get_changed_dirs(base_path)
 
     if not dirs:

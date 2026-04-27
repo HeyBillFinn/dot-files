@@ -882,6 +882,8 @@ openpr() {
   $sed_cmd -i '${/^$/d};' "$tmpFile"
 
   ghprcreate $tmpFile $baseBranch
+  echo "Disabling auto merge"
+  disableautomerge
 }
 
 disableautomerge()
@@ -895,6 +897,7 @@ disableautomerge()
   sc-curl -d '{"auto_merge":false, "auto_merge_working_hours":false}' -H "Content-Type: application/json" -H "X-Requested-With: curl" -X POST "$url"
   echo
 }
+
 automerge()
 {
   branchName=$(git rev-parse --abbrev-ref HEAD)
