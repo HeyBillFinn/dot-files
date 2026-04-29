@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Create and roll out progressive deploy plans for Standalone POS dev internal groups.
+Deploy Standalone POS APK via progressive deploy plans.
 
-Targets S700, S710, and V660P device types. For each deploy group, the script will:
-  1. CreateProgressiveDeployPlan
-  2. SendProgressiveDeployPlanToReview
-  3. ActivateProgressiveDeployPlan
-  4. AdvanceProgressiveDeployPlan -> 100%
+By default, targets dev internal deploy groups (S700, S710, V660P) with a
+fast rollout (0 -> 100%) that is automatically activated and advanced.
+
+With --ga, uses a gradual rollout plan (0, 1, 5, 10, 25, 50, 100%) and stops
+after sending the plan to review -- activation and advancement must be done
+manually via the Amp UI.
 
 Usage:
-  ./create_standalone_deploy_plans.py [dav_id] [--groups NAME [NAME ...]]
+  ./deploy_standalone_apk.py [dav_id] [--groups DDG_ID [DDG_ID ...]] [--ga]
 
   If dav_id is omitted, the most recent DAV from the standalone deploy asset is used.
   If --groups is provided, only those deploy groups are targeted (by DDG ID, e.g. tmddg_...).
+  If --ga is provided, uses a gradual rollout and requires manual activation.
 
 Requirements:
   sc-grpcurl, ~/stripe/mint/zoolander checked out
@@ -34,6 +36,9 @@ AMP_DAV_URL = "https://amp.corp.stripe.com/terminal/deploy-assets/{}/versions/{}
 AMP_DDG_URL = "https://amp.corp.stripe.com/terminal/deploy-groups/{}"
 STANDALONE_ASSET_ID = "tmda_5300MCyJb00076SByvr000000000000"
 
+GA_ROLLOUT_PLAN = [0, 1, 5, 10, 25, 50, 100]
+DEV_ROLLOUT_PLAN = [0, 100]
+
 
 @dataclass
 class DeployGroup:
@@ -46,17 +51,23 @@ class DeployGroup:
 # DDG IDs sourced from bulk_create_deploy_plans.sh (S700/S710) and deploy_to_dev_internal.sh (V660P).
 DEV_INTERNAL_GROUPS = [
     # S700
-    DeployGroup("S700",         "tmddg_EwJgwgeQOD8LTJ", [0, 100]),
+    DeployGroup("S700",         "tmddg_EwJgwgeQOD8LTJ", DEV_ROLLOUT_PLAN),
     # S710
-    DeployGroup("S710",         "tmddg_FwoTAphB8z0pLu", [0, 100]),
+    DeployGroup("S710",         "tmddg_FwoTAphB8z0pLu", DEV_ROLLOUT_PLAN),
     # V660P
-    DeployGroup("V660P A Plus", "tmddg_GRnqdgLtuxcVV6", [0, 100]),
+    DeployGroup("V660P A Plus", "tmddg_GRnqdgLtuxcVV6", DEV_ROLLOUT_PLAN),
 ]
 
 
 # ---------------------------------------------------------------------------
 # DAV lookup
 # ---------------------------------------------------------------------------
+
+def get_deploy_group_name(ddg_id: str, verbose: bool = False) -> str:
+    """Look up the display name for a deploy group ID."""
+    response = run_grpcurl("GetDeployGroupDetails", {"deploy_group_id": ddg_id}, verbose=verbose)
+    return response["deployGroup"]["name"]
+
 
 def get_latest_dav(verbose: bool = False) -> tuple[str, str]:
     """Return (dav_id, version) for the most recent asset version."""
@@ -84,6 +95,50 @@ def get_dav_version(dav_id: str, verbose: bool = False) -> str:
             break
         page_token = pagination["nextPageToken"]
     raise RuntimeError(f"DAV {dav_id!r} not found in ListAssetVersions for asset {STANDALONE_ASSET_ID}")
+
+
+# ---------------------------------------------------------------------------
+# Deploy plan status lookup
+# ---------------------------------------------------------------------------
+
+# States that indicate a plan is NOT fully rolled out to 100%.
+COMPLETED_STATES = {"COMPLETED", "CANCELED"}
+
+
+def get_latest_deploy_plan(ddg_id: str, verbose: bool = False) -> dict | None:
+    """Return the latest deploy plan for a deploy group, or None if no plans exist.
+
+    Must pass states explicitly — without the filter the API returns nothing.
+    """
+    response = run_grpcurl("ListDeployPlans", {
+        "deploy_group_id": ddg_id,
+        "states": ["ACTIVE", "PAUSED"],
+    }, verbose=verbose)
+    plans = response.get("deployPlans", [])
+    if not plans:
+        return None
+    return plans[0]
+
+
+def format_plan_status(plan: dict) -> str:
+    """Format a deploy plan's state and rollout stage as a human-readable string."""
+    state = plan.get("state", "UNKNOWN")
+    stage = plan.get("rolloutStage", None)
+    name = plan.get("name", "")
+    if stage is not None:
+        return f"{name} — {state} at {stage}%"
+    return f"{name} — {state}"
+
+
+def is_plan_fully_rolled_out(plan: dict) -> bool:
+    """Return True if the plan has completed rollout to 100%."""
+    state = plan.get("state", "")
+    stage = plan.get("rolloutStage", None)
+    if state in COMPLETED_STATES:
+        return True
+    if state == "ACTIVE" and str(stage) == "100":
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +208,7 @@ def advance_to_100(plan_id: str, verbose: bool = False) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Create and roll out Standalone POS deploy plans for dev internal groups (S700, S710, V660P)"
+        description="Deploy Standalone POS APK via progressive deploy plans."
     )
     parser.add_argument("dav_id", nargs="?", default=None, help="Device asset version ID (e.g. tmdav_...). If omitted, uses the most recent DAV.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print debug info for gRPC calls")
@@ -161,19 +216,34 @@ def main():
         "--groups", nargs="+", metavar="DDG_ID",
         help="Deploy group IDs to target (e.g. tmddg_...). If omitted, uses the default dev internal groups.",
     )
+    parser.add_argument(
+        "--ga", action="store_true",
+        help="GA rollout: use gradual rollout plan (0,1,5,10,25,50,100%%) and skip activate/advance (requires manual review).",
+    )
     args = parser.parse_args()
     verbose = args.verbose
+    ga = args.ga
+
+    rollout_plan = GA_ROLLOUT_PLAN if ga else DEV_ROLLOUT_PLAN
 
     if args.groups:
         known = {g.id: g for g in DEV_INTERNAL_GROUPS}
         groups = []
         for ddg_id in args.groups:
             if ddg_id in known:
-                groups.append(known[ddg_id])
+                g = known[ddg_id]
+                groups.append(DeployGroup(name=g.name, id=g.id, rollout_plan=rollout_plan))
             else:
-                groups.append(DeployGroup(name=ddg_id, id=ddg_id, rollout_plan=[0, 100]))
+                print(f"\nLooking up deploy group {ddg_id}...", end=" ", flush=True)
+                try:
+                    name = get_deploy_group_name(ddg_id, verbose=verbose)
+                except Exception as e:
+                    print(f"\nError looking up {ddg_id}: {e}", file=sys.stderr)
+                    sys.exit(1)
+                print(name)
+                groups.append(DeployGroup(name=name, id=ddg_id, rollout_plan=rollout_plan))
     else:
-        groups = DEV_INTERNAL_GROUPS
+        groups = [DeployGroup(name=g.name, id=g.id, rollout_plan=rollout_plan) for g in DEV_INTERNAL_GROUPS]
 
     if args.dav_id:
         dav_id = args.dav_id.strip()
@@ -197,31 +267,72 @@ def main():
         print(f"{version} ({dav_id})")
 
     title = f"Standalone app {version}"
+    rollout_label = "GA Rollout" if ga else "Dev Internal Rollout"
 
     # Print the rollout plan and prompt for confirmation.
     dav_url = AMP_DAV_URL.format(STANDALONE_ASSET_ID, dav_id)
 
     print()
     print("=" * 62)
-    print("  Standalone POS -- Dev Internal Rollout")
+    print(f"  Standalone POS -- {rollout_label}")
     print("=" * 62)
     print(f"  DAV:     {dav_id}")
     print(f"           {dav_url}")
     print(f"  Version: {version}")
     print(f"  Title:   {title}")
+    # Look up latest deploy plan status for each group.
+    print("\n  Checking latest deploy plan status...")
+    has_warnings = False
+    group_plan_status = []
+    for g in groups:
+        try:
+            plan = get_latest_deploy_plan(g.id, verbose=verbose)
+        except Exception as e:
+            group_plan_status.append((g, None, f"error: {e}"))
+            continue
+        group_plan_status.append((g, plan, None))
+        if plan and not is_plan_fully_rolled_out(plan):
+            has_warnings = True
+
     print()
     print(f"  Deploy groups ({len(groups)}):")
-    for g in groups:
+    for g, plan, err in group_plan_status:
         ddg_url = AMP_DDG_URL.format(g.id)
         print(f"    {g.name:<20}  {g.id}   rollout={g.rollout_plan}")
         print(f"    {'':20}  {ddg_url}")
+        if err:
+            print(f"    {'':20}  Latest plan: {err}")
+        elif plan is None:
+            print(f"    {'':20}  Latest plan: (none)")
+        else:
+            status_str = format_plan_status(plan)
+            plan_url = AMP_DEPLOY_PLAN_URL.format(plan["id"])
+            if is_plan_fully_rolled_out(plan):
+                print(f"    {'':20}  Latest plan: {status_str}")
+            else:
+                print(f"    {'':20}  Latest plan: {status_str}")
+                print(f"    {'':20}  ⚠️  WARNING: Previous plan not at 100%!")
+                print(f"    {'':20}  {plan_url}")
     print()
-    print("  For each group, this script will:")
-    print("    1. CreateProgressiveDeployPlan")
-    print("    2. SendProgressiveDeployPlanToReview")
-    print("    3. ActivateProgressiveDeployPlan")
-    print("    4. AdvanceProgressiveDeployPlan -> 100%")
+    if ga:
+        print("  For each group, this script will:")
+        print("    1. CreateProgressiveDeployPlan")
+        print("    2. SendProgressiveDeployPlanToReview")
+        print()
+        print("  NOTE: Activate and advance steps are skipped for GA rollouts.")
+        print("  You must manually activate and advance via the Amp UI.")
+    else:
+        print("  For each group, this script will:")
+        print("    1. CreateProgressiveDeployPlan")
+        print("    2. SendProgressiveDeployPlanToReview")
+        print("    3. ActivateProgressiveDeployPlan")
+        print("    4. AdvanceProgressiveDeployPlan -> 100%")
     print()
+
+    if has_warnings:
+        print("  ⚠️  One or more groups have a deploy plan that hasn't reached 100%.")
+        print("  Creating a new plan will supersede the in-progress rollout.")
+        print()
 
     answer = input("  Proceed? [y/N] ").strip().lower()
     if answer != "y":
@@ -243,11 +354,13 @@ def main():
             send_to_review(plan_id, verbose=verbose)
             print(f"   In review")
 
-            activate(plan_id, verbose=verbose)
-            print(f"   Activated")
+            if not ga:
+                activate(plan_id, verbose=verbose)
+                print(f"   Activated")
 
-            advance_to_100(plan_id, verbose=verbose)
-            print(f"   Rolled out 100%")
+                advance_to_100(plan_id, verbose=verbose)
+                print(f"   Rolled out 100%")
+
             print(f"   {url}")
         except Exception as e:
             error = str(e)
@@ -266,6 +379,14 @@ def main():
         else:
             print(f"  ERR {name}: {error}")
     print()
+
+    if ga:
+        ok_results = [(name, url) for name, url, error in results if error is None]
+        if ok_results:
+            print("  Deploy plan links (activate manually):")
+            for name, url in ok_results:
+                print(f"    {name}: {url}")
+            print()
 
     if any(error for _, _, error in results):
         sys.exit(1)
