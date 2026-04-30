@@ -799,6 +799,10 @@ gfbandopenpr() {
   openpr
 }
 
+gh_hostname() {
+  git remote get-url origin | sed -e 's/^.*@//' -e 's/:.*//' -e 's/^https:\/\///'
+}
+
 ghprcreate() {
   if [ "$#" -gt 2 ]; then
     echo "Illegal number of parameters"
@@ -818,8 +822,7 @@ ghprcreate() {
   # Delete the title and the blank line below the title
   $sed_cmd -i '1,2d' "$filename"
 
-  hostname=$(git remote get-url origin | sed -e 's/^.*@//' -e 's/:.*//' -e 's/^https:\/\///')
-  GH_HOST="$hostname" gh pr create --body-file "$filename" --title "$title" -B "$baseBranch"
+  GH_HOST="$(gh_hostname)" gh pr create --body-file "$filename" --title "$title" -B "$baseBranch"
 }
 
 openpr() {
@@ -884,6 +887,66 @@ openpr() {
   ghprcreate $tmpFile $baseBranch
   echo "Disabling auto merge"
   disableautomerge
+}
+
+gitpushdraft() {
+  if [ "$#" -gt 1 ]; then
+    echo "Illegal number of parameters"
+    return 1
+  fi
+  if [ "$#" -gt 0 ]; then
+    baseBranch=$1
+  else
+    baseBranch=$(default_branch)
+  fi
+
+  local start=$SECONDS
+
+  # Skip push if local HEAD matches the remote tracking branch
+  local localSha remoteSha
+  localSha=$(git rev-parse HEAD)
+  remoteSha=$(git rev-parse @{u} 2>/dev/null)
+  if [[ "$localSha" == "$remoteSha" ]]; then
+    echo "already up-to-date, skipping push."
+  else
+    git push --no-verify --force-with-lease -u origin HEAD
+    if ! [[ $? -eq 0 ]]; then
+      echo "error: failed to push branch"
+      return 1
+    fi
+    echo "push: $((SECONDS - start))s"
+  fi
+
+  # Check if a PR already exists for this branch
+  local prcheck=$SECONDS
+  if GH_HOST="$(gh_hostname)" gh pr view &>/dev/null; then
+    echo "pr check: $((SECONDS - prcheck))s"
+    echo "PR already exists, force push done. (total: $((SECONDS - start))s)"
+    return 0
+  fi
+  echo "pr check: $((SECONDS - prcheck))s"
+
+  local branchName
+  branchName=$(git rev-parse --abbrev-ref HEAD)
+
+  local prcreate=$SECONDS
+  GH_HOST="$(gh_hostname)" gh pr create --draft --title "$branchName" --body "Draft PR for CI and Gru" -B "$baseBranch"
+  echo "pr create: $((SECONDS - prcreate))s"
+
+  echo "Disabling auto merge"
+  disableautomerge
+  echo "total: $((SECONDS - start))s"
+}
+
+closedraftpr() {
+  local isDraft
+  isDraft=$(GH_HOST="$(gh_hostname)" gh pr view --json isDraft --jq '.isDraft')
+  if [[ "$isDraft" != "true" ]]; then
+    echo "error: current branch does not have a draft PR (isDraft=$isDraft)"
+    return 1
+  fi
+  GH_HOST="$(gh_hostname)" gh pr close
+  echo "Draft PR closed."
 }
 
 disableautomerge()
