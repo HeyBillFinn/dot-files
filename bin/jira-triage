@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+"""Interactive triage tool for open Jira tickets you reported."""
+
+import curses
+import http.client
+import json
+import os
+import socket
+import subprocess
+import textwrap
+import threading
+import urllib.parse
+
+JIRA_USER = os.environ.get("JIRA_USER", "billfinn")
+JIRA_HOST = "jira.corp.stripe.com"
+UNIX_PROXY = os.path.expanduser("~/.stripeproxy")
+COOKIE_FILE = os.path.expanduser("~/.jira.d/cookies.js")
+
+JQL = (
+    f"reporter = {JIRA_USER} AND "
+    'status not in (Resolved, Done, "Won\'t Fix", "Won\'t Do", '
+    '"Closed", "Review Complete", "Review Passed", "Canceled") '
+    "ORDER BY updated DESC"
+)
+
+# In-memory comment cache keyed by ticket key
+_comment_cache = {}
+
+
+class UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, unix_socket, host):
+        super().__init__(host)
+        self.unix_socket = unix_socket
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(self.unix_socket)
+
+
+def load_cookies():
+    with open(COOKIE_FILE) as f:
+        cookies = json.load(f)
+    return "; ".join(f'{c["Name"]}={c["Value"]}' for c in cookies)
+
+
+def jira_get(path):
+    conn = UnixHTTPConnection(UNIX_PROXY, JIRA_HOST)
+    conn.request("GET", path, headers={
+        "Host": JIRA_HOST,
+        "Cookie": load_cookies(),
+        "Content-Type": "application/json",
+    })
+    resp = conn.getresponse()
+    body = resp.read()
+    if resp.status != 200:
+        raise RuntimeError(f"Jira API {resp.status}: {body.decode()}")
+    return json.loads(body)
+
+
+def fetch_tickets():
+    tickets = []
+    start = 0
+    batch = 100
+    while True:
+        params = urllib.parse.urlencode({
+            "jql": JQL,
+            "startAt": start,
+            "maxResults": batch,
+            "fields": "key,summary,description,status,issuetype,assignee",
+        })
+        data = jira_get(f"/rest/api/2/search?{params}")
+        for issue in data.get("issues", []):
+            f = issue["fields"]
+            desc = f.get("description") or "(no description)"
+            desc = desc.replace("\r\n", "\n").replace("\r", "\n")
+            assignee_obj = f.get("assignee")
+            assignee = assignee_obj.get("displayName", "Unassigned") if assignee_obj else "Unassigned"
+            tickets.append({
+                "key": issue["key"],
+                "summary": f.get("summary", ""),
+                "description": desc,
+                "status": f.get("status", {}).get("name", ""),
+                "type": f.get("issuetype", {}).get("name", ""),
+                "assignee": assignee,
+            })
+        if start + batch >= data.get("total", 0):
+            break
+        start += batch
+    return tickets
+
+
+def fetch_comments(ticket_key):
+    """Fetch comments for a ticket from the REST API."""
+    data = jira_get(f"/rest/api/2/issue/{ticket_key}/comment")
+    comments = []
+    for c in data.get("comments", []):
+        body = (c.get("body") or "").replace("\r\n", "\n").replace("\r", "\n")
+        comments.append({
+            "author": c.get("author", {}).get("displayName", "Unknown"),
+            "created": c.get("created", "")[:10],
+            "body": body,
+        })
+    return comments
+
+
+def fetch_comments_async(ticket_key, result_holder):
+    """Fetch comments in a background thread. result_holder is a dict
+    that gets 'comments' or 'error' set when done."""
+    try:
+        comments = fetch_comments(ticket_key)
+        _comment_cache[ticket_key] = comments
+        result_holder["comments"] = comments
+    except Exception as e:
+        result_holder["error"] = str(e)
+    result_holder["done"] = True
+
+
+JIRA_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jira", "jira")
+
+
+def close_wontfix(ticket_key):
+    subprocess.run([
+        JIRA_BIN, "transition", "--noedit",
+        "-m", "Archiving as stale.",
+        "Won't Fix", ticket_key,
+    ], check=True)
+
+
+def transition_done(ticket_key):
+    subprocess.run([
+        JIRA_BIN, "transition", "--noedit",
+        "Done", ticket_key,
+    ], check=True)
+
+
+def open_in_browser(ticket_key):
+    import webbrowser
+    webbrowser.open(f"https://go/jira/{ticket_key}")
+
+
+def draw_list(stdscr, tickets, cursor, scroll_offset):
+    height, width = stdscr.getmaxyx()
+    header_lines = 2
+    footer_lines = 3
+    list_height = height - header_lines - footer_lines
+
+    title = f" {len(tickets)} open ticket(s) reported by {JIRA_USER} "
+    stdscr.attron(curses.A_BOLD)
+    stdscr.addnstr(0, 0, title.center(width), width)
+    stdscr.attroff(curses.A_BOLD)
+
+    if not tickets:
+        stdscr.addnstr(2, 2, "No open tickets found.", width - 4)
+        return
+
+    key_width = max(len(t["key"]) for t in tickets)
+    status_width = min(20, max(len(t["status"]) for t in tickets))
+    type_width = max(len(t["type"]) for t in tickets)
+    assignee_width = min(20, max(len(t["assignee"]) for t in tickets))
+
+    for i in range(list_height):
+        idx = scroll_offset + i
+        row = header_lines + i
+        if idx >= len(tickets):
+            stdscr.move(row, 0)
+            stdscr.clrtoeol()
+            continue
+
+        t = tickets[idx]
+        num = f"{idx + 1:>4}. "
+        key_part = f"{t['key']:<{key_width}}"
+        status = t["status"][:status_width]
+        status_part = f"  {status:<{status_width}}"
+        type_part = f"  {t['type']:<{type_width}}"
+        assignee = t["assignee"][:assignee_width]
+        assignee_part = f"  {assignee:<{assignee_width}}"
+        prefix = num + key_part + status_part + type_part + assignee_part + "  "
+        summary_space = max(0, width - len(prefix) - 1)
+        summary = t["summary"][:summary_space]
+        line = prefix + summary
+
+        if idx == cursor:
+            stdscr.attron(curses.color_pair(1))
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+            stdscr.attroff(curses.color_pair(1))
+        else:
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+
+    help_row = height - 2
+    help_text = " [Enter] view  [x] Won't Fix  [d] Done  [v] browse  [r] refresh  [q] quit "
+    stdscr.attron(curses.A_DIM)
+    stdscr.addnstr(help_row, 0, help_text.center(width), width - 1)
+    stdscr.attroff(curses.A_DIM)
+
+
+def build_detail_lines(ticket, comments, content_width, loading=False, error=None):
+    """Build the list of display lines for the detail screen."""
+    lines = []
+    lines.append(f"{ticket['key']}: {ticket['summary']}")
+    lines.append(f"Type: {ticket['type']}  |  Status: {ticket['status']}  |  Assignee: {ticket['assignee']}")
+    lines.append(f"https://go/jira/{ticket['key']}")
+    lines.append("")
+    for paragraph in ticket["description"].split("\n"):
+        if paragraph.strip():
+            lines.extend(textwrap.wrap(paragraph, width=content_width))
+        else:
+            lines.append("")
+
+    lines.append("")
+    lines.append("=" * min(content_width, 60))
+
+    if loading:
+        lines.append("")
+        lines.append("Loading comments...")
+    elif error:
+        lines.append("")
+        lines.append(f"Error loading comments: {error}")
+    elif comments is not None:
+        if not comments:
+            lines.append("")
+            lines.append("(no comments)")
+        else:
+            for c in comments:
+                lines.append("")
+                lines.append(f"{c['author']}  ({c['created']})")
+                lines.append("-" * min(content_width, 40))
+                for paragraph in c["body"].split("\n"):
+                    if paragraph.strip():
+                        lines.extend(textwrap.wrap(paragraph, width=content_width))
+                    else:
+                        lines.append("")
+
+    return lines
+
+
+def render_detail(stdscr, lines, scroll, width, height):
+    """Render the detail view lines with current scroll position."""
+    viewable = height - 2  # reserve bottom 2 lines for help
+    stdscr.clear()
+    for i in range(viewable):
+        li = scroll + i
+        if li >= len(lines):
+            break
+        try:
+            stdscr.addnstr(i, 2, lines[li], width - 3)
+        except curses.error:
+            pass
+
+    help_text = " [j/k] prev/next  [x] Won't Fix  [d] Done  [v] browse  [r] refresh  [Enter/q] back "
+    stdscr.attron(curses.A_DIM)
+    try:
+        stdscr.addnstr(height - 1, 0, help_text.center(width), width - 1)
+    except curses.error:
+        pass
+    stdscr.attroff(curses.A_DIM)
+    stdscr.refresh()
+
+
+def _init_detail_state(ticket, content_width):
+    """Set up loading state for a ticket's detail view."""
+    cached = _comment_cache.get(ticket["key"])
+    if cached is not None:
+        lines = build_detail_lines(ticket, cached, content_width)
+        return lines, False, {"done": True}
+    else:
+        result_holder = {"done": False}
+        thread = threading.Thread(
+            target=fetch_comments_async,
+            args=(ticket["key"], result_holder),
+            daemon=True,
+        )
+        thread.start()
+        lines = build_detail_lines(ticket, None, content_width, loading=True)
+        return lines, True, result_holder
+
+
+def show_description_screen(stdscr, tickets, cursor):
+    """Detail view with j/k navigation, x to close, async comments.
+    Returns (tickets, cursor) which may be modified by close actions."""
+    height, width = stdscr.getmaxyx()
+    content_width = min(width - 4, 100)
+    scroll = 0
+    spinner_frames = ["|", "/", "-", "\\"]
+    spinner_idx = 0
+
+    ticket = tickets[cursor]
+    lines, loading, result_holder = _init_detail_state(ticket, content_width)
+
+    stdscr.timeout(150 if loading else -1)
+
+    while True:
+        if not tickets:
+            stdscr.timeout(-1)
+            return tickets, 0
+
+        height, width = stdscr.getmaxyx()
+        content_width = min(width - 4, 100)
+        viewable = height - 2
+
+        # If loading just finished, rebuild lines
+        if loading and result_holder.get("done"):
+            loading = False
+            stdscr.timeout(-1)
+            comments = result_holder.get("comments")
+            error = result_holder.get("error")
+            lines = build_detail_lines(ticket, comments, content_width, error=error)
+
+        # Update spinner in loading line
+        if loading:
+            spinner_idx = (spinner_idx + 1) % len(spinner_frames)
+            for li, line in enumerate(lines):
+                if line.startswith("Loading comments"):
+                    lines[li] = f"Loading comments... {spinner_frames[spinner_idx]}"
+                    break
+
+        render_detail(stdscr, lines, scroll, width, height)
+
+        key = stdscr.getch()
+        if key == -1:
+            continue
+
+        if key == curses.KEY_DOWN:
+            if scroll < max(0, len(lines) - viewable):
+                scroll += 1
+        elif key == curses.KEY_UP:
+            if scroll > 0:
+                scroll -= 1
+        elif key == curses.KEY_NPAGE:
+            scroll = min(scroll + viewable, max(0, len(lines) - viewable))
+        elif key == curses.KEY_PPAGE:
+            scroll = max(scroll - viewable, 0)
+
+        elif key == ord("j"):
+            # Next ticket
+            if cursor < len(tickets) - 1:
+                cursor += 1
+                ticket = tickets[cursor]
+                scroll = 0
+                lines, loading, result_holder = _init_detail_state(ticket, content_width)
+                stdscr.timeout(150 if loading else -1)
+
+        elif key == ord("k"):
+            # Previous ticket
+            if cursor > 0:
+                cursor -= 1
+                ticket = tickets[cursor]
+                scroll = 0
+                lines, loading, result_holder = _init_detail_state(ticket, content_width)
+                stdscr.timeout(150 if loading else -1)
+
+        elif key in (ord("x"), ord("d")):
+            if key == ord("x"):
+                fn, label, prompt = close_wontfix, "Won't Fix", f"Close {ticket['key']} as Won't Fix? [Y/n] "
+            else:
+                fn, label, prompt = transition_done, "Done", f"Mark {ticket['key']} as Done? [Y/n] "
+            if confirm_prompt(stdscr, prompt):
+                result, stdscr = run_transition(stdscr, ticket, tickets, fn, label)
+                if result is None:
+                    continue
+                tickets = result
+                if not tickets:
+                    return tickets, 0
+                cursor = min(cursor, len(tickets) - 1)
+                ticket = tickets[cursor]
+                scroll = 0
+                lines, loading, result_holder = _init_detail_state(ticket, content_width)
+                stdscr.timeout(150 if loading else -1)
+
+        elif key == ord("v"):
+            open_in_browser(ticket["key"])
+
+        elif key == ord("r"):
+            loading = True
+            result_holder = {"done": False}
+            lines = build_detail_lines(ticket, None, content_width, loading=True)
+            thread = threading.Thread(
+                target=fetch_comments_async,
+                args=(ticket["key"], result_holder),
+                daemon=True,
+            )
+            thread.start()
+            stdscr.timeout(150)
+
+        elif key in (ord("q"), ord("\n"), 27):
+            stdscr.timeout(-1)
+            return tickets, cursor
+
+
+def confirm_prompt(stdscr, msg):
+    height, width = stdscr.getmaxyx()
+    stdscr.move(height - 1, 0)
+    stdscr.clrtoeol()
+    stdscr.attron(curses.A_BOLD)
+    stdscr.addnstr(height - 1, 0, msg, width - 1)
+    stdscr.attroff(curses.A_BOLD)
+    stdscr.refresh()
+    key = stdscr.getch()
+    return key not in (ord("n"), ord("N"))
+
+
+def run_transition(stdscr, ticket, tickets, transition_fn, label):
+    """Run a transition, handle curses teardown/restore. Returns updated tickets list or None on failure."""
+    curses.endwin()
+    try:
+        transition_fn(ticket["key"])
+        tickets = [t for t in tickets if t["key"] != ticket["key"]]
+    except subprocess.CalledProcessError as e:
+        stdscr = _restore_curses()
+        show_message(stdscr, f"Failed: {e}")
+        return None, stdscr
+    stdscr = _restore_curses()
+    show_message(stdscr, f"{label} {ticket['key']}.")
+    return tickets, stdscr
+
+
+def _restore_curses():
+    stdscr = curses.initscr()
+    curses.noecho()
+    curses.cbreak()
+    stdscr.keypad(True)
+    curses.curs_set(0)
+    return stdscr
+
+
+def show_message(stdscr, msg):
+    height, width = stdscr.getmaxyx()
+    stdscr.move(height - 1, 0)
+    stdscr.clrtoeol()
+    stdscr.addnstr(height - 1, 0, msg + "  [press any key]", width - 1)
+    stdscr.refresh()
+    stdscr.getch()
+
+
+def curses_main(stdscr):
+    curses.curs_set(0)
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    stdscr.clear()
+    stdscr.addstr(0, 0, f"Fetching open tickets reported by {JIRA_USER}...")
+    stdscr.refresh()
+
+    tickets = fetch_tickets()
+    cursor = 0
+    scroll_offset = 0
+
+    while True:
+        height, width = stdscr.getmaxyx()
+        header_lines = 2
+        footer_lines = 3
+        list_height = height - header_lines - footer_lines
+
+        if tickets:
+            cursor = max(0, min(cursor, len(tickets) - 1))
+            if cursor < scroll_offset:
+                scroll_offset = cursor
+            elif cursor >= scroll_offset + list_height:
+                scroll_offset = cursor - list_height + 1
+        else:
+            cursor = 0
+            scroll_offset = 0
+
+        stdscr.clear()
+        draw_list(stdscr, tickets, cursor, scroll_offset)
+        stdscr.refresh()
+
+        key = stdscr.getch()
+
+        if key == curses.KEY_UP or key == ord("k"):
+            if cursor > 0:
+                cursor -= 1
+
+        elif key == curses.KEY_DOWN or key == ord("j"):
+            if cursor < len(tickets) - 1:
+                cursor += 1
+
+        elif key == curses.KEY_PPAGE:
+            cursor = max(0, cursor - list_height)
+
+        elif key == curses.KEY_NPAGE:
+            cursor = min(len(tickets) - 1, cursor + list_height)
+
+        elif key == ord("g"):
+            cursor = 0
+
+        elif key == ord("G"):
+            cursor = len(tickets) - 1
+
+        elif key == ord("\n"):
+            if tickets:
+                tickets, cursor = show_description_screen(stdscr, tickets, cursor)
+
+        elif key == ord("v"):
+            if tickets:
+                open_in_browser(tickets[cursor]["key"])
+
+        elif key in (ord("x"), ord("d")):
+            if tickets:
+                ticket = tickets[cursor]
+                if key == ord("x"):
+                    fn, label, prompt = close_wontfix, "Won't Fix", f"Close {ticket['key']} as Won't Fix? [Y/n] "
+                else:
+                    fn, label, prompt = transition_done, "Done", f"Mark {ticket['key']} as Done? [Y/n] "
+                if confirm_prompt(stdscr, prompt):
+                    result, stdscr = run_transition(stdscr, ticket, tickets, fn, label)
+                    if result is not None:
+                        tickets = result
+
+
+        elif key == ord("r"):
+            stdscr.clear()
+            stdscr.addstr(0, 0, "Refreshing...")
+            stdscr.refresh()
+            tickets = fetch_tickets()
+            cursor = 0
+            scroll_offset = 0
+
+        elif key == ord("q"):
+            break
+
+
+def main():
+    curses.wrapper(curses_main)
+
+
+if __name__ == "__main__":
+    main()
