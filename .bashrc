@@ -521,6 +521,10 @@ _adbupdaterpid() {
 _adbstandalonepid() {
   adb shell ps | grep com.stripe.standalone.app | tr -s "[:space:]" ' ' | cut -d' ' -f2
 }
+
+_adbdonationstestapppid() {
+  adb shell ps | grep com.stripe.donationstestapp | tr -s "[:space:]" ' ' | cut -d' ' -f2
+}
 type_slowly() {
     text="$1"
     consecutive_fast=0
@@ -658,49 +662,40 @@ append_pid() {
 
 adblogcat() {
   type adblogcat
+
   READER_PID=$(_adbreaderpid)
   UPDATER_PID=$(_adbupdaterpid)
   STANDALONE_PID=$(_adbstandalonepid)
   TEST_APP_PID=$(_adbtestapppid)
+  DONATIONS_PID=$(_adbdonationstestapppid)
 
-  declare -a pids=()
-  declare -a labels=()
+  echo "reader:      ${READER_PID:-not running} (com.stripe.reader)"
+  echo "updater:     ${UPDATER_PID:-not running} (com.stripe.updater)"
+  echo "standalone:  ${STANDALONE_PID:-not running} (com.stripe.standalone.app)"
+  echo "testapp:     ${TEST_APP_PID:-not running} (com.stripe.terminal.testapp)"
+  echo "donations:   ${DONATIONS_PID:-not running} (com.stripe.donationstestapp)"
+  echo "---"
 
-  [[ -n $READER_PID ]]     && { pids+=("$READER_PID");     labels+=("<reader PID>"); }
-  [[ -n $UPDATER_PID ]]    && { pids+=("$UPDATER_PID");    labels+=("<updater PID>"); }
-  [[ -n $STANDALONE_PID ]] && { pids+=("$STANDALONE_PID"); labels+=("<standalone PID>"); }
-  [[ -n $TEST_APP_PID ]]   && { pids+=("$TEST_APP_PID");   labels+=("<test-app PID>"); }
-
-  if [[ ${#pids[@]} -eq 0 ]]; then
-    echo "No PIDs found." >&2
-    return 1
-  fi
-
-  # Build grep alternation (no escaping)
-  GREP_ALT=""
-  for pid in "${pids[@]}"; do
-    if [[ -z $GREP_ALT ]]; then
-      GREP_ALT=$pid
-    else
-      GREP_ALT="$GREP_ALT|$pid"
-    fi
-  done
-
-  # Build sed script to replace each PID when matched as a whole token.
+  # Build sed script to label known PIDs inline
   SED_SCRIPT=""
-  for i in "${!pids[@]}"; do
-    pid=${pids[i]}
-    label=${labels[i]}
-    # No escaping of pid or label (assumed safe)
-    SED_SCRIPT="$SED_SCRIPT;s/ $pid / $label /g"
-  done
+  [[ -n $READER_PID ]]     && SED_SCRIPT="$SED_SCRIPT;s/ $READER_PID / <reader> /g"
+  [[ -n $UPDATER_PID ]]    && SED_SCRIPT="$SED_SCRIPT;s/ $UPDATER_PID / <updater> /g"
+  [[ -n $STANDALONE_PID ]] && SED_SCRIPT="$SED_SCRIPT;s/ $STANDALONE_PID / <standalone> /g"
+  [[ -n $TEST_APP_PID ]]   && SED_SCRIPT="$SED_SCRIPT;s/ $TEST_APP_PID / <testapp> /g"
+  [[ -n $DONATIONS_PID ]]  && SED_SCRIPT="$SED_SCRIPT;s/ $DONATIONS_PID / <donations> /g"
   SED_SCRIPT=${SED_SCRIPT#;}
 
   TIMESTAMP=$(date -u +"%Y_%m_%dT%H_%M_%SZ")
-  adb shell "logcat" \
-    | grep --line-buffered -E "($GREP_ALT)" \
-    | gsed --unbuffered -E "$SED_SCRIPT" \
-    | tee "logcat_${TIMESTAMP}.txt"
+  if [[ -n $SED_SCRIPT ]]; then
+    adb shell logcat \
+      | grep --line-buffered -vE " (chatty|ActivityManager|SystemServiceManager|SystemServer|SystemServerTiming|IzatSvc_IzatManager|LocSvc_HIDL_IzatProvider|TelecomFramework|Telecom|vold|ThermalHAL-UTIL|ThermalHAL-TARGET|wpa_supplicant|WifiService) " \
+      | gsed --unbuffered -E "$SED_SCRIPT" \
+      | tee "logcat_${TIMESTAMP}.txt"
+  else
+    adb shell logcat \
+      | grep --line-buffered -vE " (chatty|ActivityManager|SystemServiceManager|SystemServer|SystemServerTiming|IzatSvc_IzatManager|LocSvc_HIDL_IzatProvider|TelecomFramework|Telecom|vold|ThermalHAL-UTIL|ThermalHAL-TARGET|wpa_supplicant|WifiService) " \
+      | tee "logcat_${TIMESTAMP}.txt"
+  fi
 }
 
 teedatetxtfile() {
@@ -836,6 +831,14 @@ openpr() {
     baseBranch=$(default_branch)
   fi
 
+  # Close existing draft PR if one exists
+  local isDraft
+  isDraft=$(GH_HOST="$(gh_hostname)" gh pr view --json isDraft --jq '.isDraft' 2>/dev/null)
+  if [[ "$isDraft" == "true" ]]; then
+    echo "Draft PR exists, closing it first..."
+    closedraftpr
+  fi
+
   current_folder=$(basename "$PWD")
   if [[ "$current_folder" != "android" ]]; then
     echo "fetching...$baseBranch"
@@ -869,11 +872,18 @@ openpr() {
     return 1
   fi
 
-  # Push branch, if required
-  diffUpstream=$(git diff --quiet @{u}..HEAD)
-  diffExitCode=$?
-  if ! [[ $diffExitCode -eq 0 ]]; then
-    git push --no-verify -u origin HEAD
+  # Push branch if local and remote differ
+  local localSha remoteSha
+  localSha=$(git rev-parse HEAD)
+  remoteSha=$(git rev-parse @{u} 2>/dev/null)
+  if [[ "$localSha" != "$remoteSha" ]]; then
+    echo "Local and remote differ. Push with --force-with-lease? [y/n]"
+    read -r answer
+    if [[ "$answer" != "y" ]]; then
+      echo "Aborting. PR template saved at: $tmpFile"
+      return 1
+    fi
+    git push --no-verify --force-with-lease -u origin HEAD
     if ! [[ $? -eq 0 ]]; then
       cat "$tmpFile"
       return 1
@@ -889,7 +899,7 @@ openpr() {
   disableautomerge
 }
 
-gitpushdraft() {
+gpush() {
   if [ "$#" -gt 1 ]; then
     echo "Illegal number of parameters"
     return 1
@@ -945,7 +955,7 @@ closedraftpr() {
     echo "error: current branch does not have a draft PR (isDraft=$isDraft)"
     return 1
   fi
-  GH_HOST="$(gh_hostname)" gh pr close
+  GH_HOST="$(gh_hostname)" gh pr close "$(git branch --show-current)"
   echo "Draft PR closed."
 }
 
@@ -969,7 +979,7 @@ automerge()
   orgAndRepo=$(echo "$remoteUrl" | cut -d':' -f 2 | cut -d'.' -f 1)
   url="cibot.corp.stripe.com/api/git.corp.stripe.com/$orgAndRepo/branches/$branchName/auto_merge"
   echo $url
-  sc-curl -d '{"auto_merge":true, "auto_merge_working_hours":true}' -H "Content-Type: application/json" -H "X-Requested-With: curl" -X POST "$url"
+  sc-curl -d '{"auto_merge":true}' -H "Content-Type: application/json" -H "X-Requested-With: curl" -X POST "$url"
   echo
 }
 
@@ -1068,49 +1078,6 @@ gitcheckoutremotebranch()
   git checkout "$1"
 }
 
-gitpushtmp()
-{
-  if [ "$#" -gt 2 ]; then
-    echo "Illegal number of parameters"
-    return 1
-  fi
-  branchName=$(git rev-parse --abbrev-ref HEAD)
-  if [[ $branchName =~ ^master$ ]] || [[ $branchName =~ ^main$ ]]; then
-    echo "error: on master or main branch"
-    return 1
-  fi
-  tmpBranchName=$(echo $branchName | sed 's/^/tmp-/')
-  branchExists=$(git rev-parse --verify $tmpBranchName 2>/dev/null)
-  if [[ -z $branchExists ]]; then
-    echo "branch $tmpBranchName doesn't exist; creating"
-    git branch $tmpBranchName
-  fi
-
-  if [ "$#" -gt 0 ]; then
-    if [ "$#" -eq 2 ]; then
-      # Ignore $1; we just use it as a flag to indicate "all"
-      for hash in `git log --reverse --format='%H' $2^...HEAD`; do
-        echo "force pushing $tmpBranchName to $hash"
-        CMD="git push --no-verify -f -u origin $hash:$tmpBranchName"
-      done
-    else
-      echo "force pushing $tmpBranchName to $1"
-      CMD="git push --no-verify -f -u origin $1:$tmpBranchName"
-    fi
-  else
-    echo "updating $tmpBranchName to $branchName"
-    git branch -f $tmpBranchName $branchName
-    echo "force pushing $tmpBranchName"
-    if ! [[ $tmpBranchName =~ ^tmp.*$ ]]; then
-      echo "error: tmp branch incorrectly formatted"
-      return 1
-    fi
-    # Don't skip verify because we're at HEAD
-    CMD="git push -u origin $tmpBranchName -f"
-  fi
-  echo $CMD
-  $CMD || notify_failed
-}
 
 notify_failed() {
   osascript -e 'display notification "Failed"'
@@ -1834,7 +1801,6 @@ alias glbf='git log -p --author=billfinn'
 alias glp='git log -p --follow'
 # alias gg='git grep --break --heading --line-number'
 alias gg='git grep --line-number'
-alias gpush='git push -u origin HEAD'
 alias gitc='git commit'
 alias r='git reset -p HEAD'
 alias c='git commit'
