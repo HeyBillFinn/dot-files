@@ -1204,6 +1204,15 @@ setpaymentintentid() {
   fi
 }
 
+setreadercollecteddataid() {
+  if [ "$#" -ne 1 ]; then
+    echo "Illegal number of parameters"
+  else
+    TMRCD_ID="$1"
+    export TMRCD_ID
+  fi
+}
+
 setconfigurationid() {
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
@@ -1307,6 +1316,22 @@ curlreaderdelete() {
   curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} -X DELETE "https://api.stripe.com/v1/terminal/readers/$1" -u "$SECRET_KEY":
 }
 
+curlreaderaccessibilitymodeenable() {
+  curl_output=$(curl -X POST -vvv -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/readers/$READER_ID/accessibility_mode" \
+    -H "Stripe-Version: 2026-04-22.dahlia;terminal_accessibility_mode_preview=v1" \
+    -u "$SECRET_KEY:" \
+    -d text_to_speech="speakers")
+  echo "$curl_output"
+}
+
+curlreaderaccessibilitymodedisable() {
+  curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/readers/$READER_ID/accessibility_mode" \
+    -H "Stripe-Version: 2026-04-22.dahlia;terminal_accessibility_mode_preview=v1" \
+    -u "$SECRET_KEY:" \
+    -d text_to_speech="off")
+  echo "$curl_output"
+}
+
 curlreadergetwithconnectiontoken() {
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
@@ -1370,6 +1395,7 @@ curllocationscreate() {
   export LOCATION_ID
   echo "Setting location ID: $LOCATION_ID"
 }
+
 curllocationsdelete() {
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
@@ -1380,6 +1406,7 @@ curllocationsdelete() {
 
 alias curllocationsclearconfigoverride='curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/terminal/locations/$LOCATION_ID -u "$SECRET_KEY": -d configuration_overrides='
 alias curlconfigurationslist='curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/configurations" -u "$SECRET_KEY":'
+alias curlreadercollecteddataget='curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/reader_collected_data/$TMRCD_ID" -u "$SECRET_KEY":'
 alias curlconfigurationsget='curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/configurations/$CONFIGURATION_ID" -u "$SECRET_KEY":'
 alias curlconfigurationsgetdefault='curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/configurations?is_account_default=true" -u "$SECRET_KEY":'
 alias curlconfigurationscreate='curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} -X POST "https://api.stripe.com/v1/terminal/configurations" -u "$SECRET_KEY":'
@@ -1447,9 +1474,14 @@ curlreadercollectinputsx2() {
     -d "inputs[1[custom_text][title]"="Title 2"
 }
 
-curlreadercollectdatanfc() {
+curlreadercollectdatamagstripe() {
   type curlreadercollectdatanfc
   curl ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} -X POST "https://api.stripe.com/v1/terminal/readers/$READER_ID/collect_data" -u "$SECRET_KEY": -H "Stripe-Version: 2026-03-25.preview;" -d "type"=magstripe
+}
+
+curlreadercollectdatanfc() {
+  type curlreadercollectdatanfc
+  curl ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} -X POST "https://api.stripe.com/v1/terminal/readers/$READER_ID/collect_data" -u "$SECRET_KEY": -H "Stripe-Version: 2026-03-25.preview;" -d "type"=nfc
 }
 
 curlreadercollectinputsbacktoback() {

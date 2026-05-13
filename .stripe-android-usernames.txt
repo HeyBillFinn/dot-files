@@ -1,13 +1,11 @@
 abbye
 abbye-stripe
+agarwal
+agarwal-stripe
 aliarshad
 aliarshad-stripe
 alucentini
 alucentini-stripe
-skhemani
-skhemani-stripe
-agarwal
-agarwal-stripe
 amarnath
 amarnath-stripe
 amp
@@ -132,6 +130,8 @@ mattlaroche
 mattlaroche-stripe
 maxa
 maxa-stripe
+mcomella
+mcomella-stripe
 mehran
 mehran-stripe
 mindy
@@ -152,6 +152,7 @@ padelsbach
 padelsbach-stripe
 patersond
 patersond-stripe
+philm
 pserotta
 pserotta-stripe
 pzhang
@@ -188,6 +189,8 @@ shwa
 shwa-stripe
 sjl
 sjl-stripe
+skhemani
+skhemani-stripe
 stevenmacneil
 stevenmacneil-stripe
 stripe-internal/codeowners-developer-environments
@@ -241,4 +244,3 @@ zg
 zg-stripe
 zifanfeng
 zifanfeng-stripe
-philm
