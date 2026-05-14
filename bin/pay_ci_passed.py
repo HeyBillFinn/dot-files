@@ -20,6 +20,9 @@ IGNORED_JOB_FAILURES = ["android-ios-kmp"]
 android_kmp_rebuild_triggered = False
 android_kmp_rebuild_thread = None
 
+# Track if we've already announced "waiting on logs"
+waiting_on_logs_announced = False
+
 class BuildNotAvailableYet(Exception):
     pass
 
@@ -99,6 +102,16 @@ def notify_failed():
     subprocess.run(["osascript", "-e", 'display notification "Failed"'])
 
 
+def notify_failed_waiting_on_logs():
+    subprocess.run(["say", f"job failed waiting on logs window {get_tmux_window_number()}"])
+    subprocess.run(["osascript", "-e", 'display notification "Failed - waiting on logs"'])
+
+
+def notify_failed_logs_ready():
+    subprocess.run(["say", f"job failed logs are ready window {get_tmux_window_number()}"])
+    subprocess.run(["osascript", "-e", 'display notification "Failed - logs ready"'])
+
+
 def notify_passed():
     subprocess.run(["say", f"passed window {get_tmux_window_number()}"])
     subprocess.run(["osascript", "-e", 'display notification "Passed"'])
@@ -159,6 +172,11 @@ def filter_and_print_jobs(jobs):
 
     # Convert back to list and ensure all required keys exist
     jobs = list(deduplicated_jobs.values())
+
+    # Annotate failed jobs where logs aren't ready yet
+    for job in jobs:
+        if "FAILED" in job["Status"] and not job.get("LogsReady", True):
+            job["Status"] = job["Status"] + " (logs pending)"
 
     # # Remove "STOPPED" jobs. This can happen for canceled build groups at the
     # # same git reference.
@@ -278,6 +296,7 @@ def convert_build_to_job(now, raw_build):
         "Duration": str(td),
         "Link": raw_build["public_url"],
         "BuildID": raw_build.get("token", ""),
+        "LogsReady": ended is not None,
     }
 
 
@@ -317,7 +336,7 @@ def handle_build_group(ref):
 
 
 def main(ref, force_wait):
-    global android_kmp_rebuild_triggered, android_kmp_rebuild_thread
+    global android_kmp_rebuild_triggered, android_kmp_rebuild_thread, waiting_on_logs_announced
 
     try:
         if ref.startswith("bg_"):
@@ -341,6 +360,7 @@ def main(ref, force_wait):
 
     job_statuses = defaultdict(list)
     job_build_ids = {}
+    job_logs_ready = {}
     for j in jobs:
         if "PASSED" in j["Status"]:
             result = "PASSED"
@@ -354,6 +374,7 @@ def main(ref, force_wait):
         # Store build ID for each job (keep the last one if multiple)
         if "BuildID" in j:
             job_build_ids[j["Job"]] = j["BuildID"]
+        job_logs_ready[j["Job"]] = j.get("LogsReady", True)
 
     # Check for android-ios-kmp failure and trigger rebuild if needed
     if "android-ios-kmp" in job_statuses:
@@ -388,18 +409,32 @@ def main(ref, force_wait):
         elif any([s == "STARTED" for s in statuses]):
             any_in_progress = True
 
-    if len(failed_jobs) > 0 and not force_wait:
-        print_failed_jobs_and_notify(failed_jobs)
+    if len(failed_jobs) > 0 and not (force_wait and any_in_progress):
+        all_logs_ready = all(job_logs_ready.get(job, True) for job in failed_jobs)
+
+        if not all_logs_ready:
+            if not waiting_on_logs_announced:
+                waiting_on_logs_announced = True
+                print("Failed jobs (logs not yet available):")
+                print("\n".join(failed_jobs))
+                notify_failed_waiting_on_logs()
+            else:
+                print("Still waiting on logs...")
+            return "waiting_on_logs"
+
+        # Logs are ready
+        if waiting_on_logs_announced:
+            print_failed_jobs_and_notify(failed_jobs)
+            notify_failed_logs_ready()
+        else:
+            print_failed_jobs_and_notify(failed_jobs)
         sys.exit(1)
 
     if any_in_progress:
         print("jobs still in progress")
-        return
+        return None
 
-    if len(failed_jobs) > 0:
-        print_failed_jobs_and_notify(failed_jobs)
-        sys.exit(1)
-    elif len(stopped_jobs) > 0:
+    if len(stopped_jobs) > 0:
         print_stopped_jobs_and_notify(stopped_jobs)
         sys.exit(1)
     else:
@@ -433,8 +468,8 @@ force_wait = args.force_wait
 
 while True:
     print(f"{datetime.now()} running ...")
-    main(ref, force_wait)
-    seconds = 30
+    result = main(ref, force_wait)
+    seconds = 10 if result == "waiting_on_logs" else 30
     while seconds > 0:
         mins, secs = divmod(seconds, 60)
         timer = f"{mins:02d}:{secs:02d}"

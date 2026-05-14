@@ -1,6 +1,6 @@
 {
   "JavaScript-Indent": { "branch": "master", "commit": "8e9aa08189d420d9384f38a11ea89a0bff846e6d" },
-  "ale": { "branch": "master", "commit": "78122497f57d17257c77301a08ddb7562f625f7e" },
+  "ale": { "branch": "master", "commit": "916c8764ce9d395f788eae9adf207a4bfe8a038e" },
   "ctrlp.vim": { "branch": "master", "commit": "3739dcd638f457559d5a1ae1e398276175694e4b" },
   "github-vim": { "branch": "master", "commit": "8223b6fc77e7323d1476cc67f22b1c847de51beb" },
   "kotlin-vim": { "branch": "master", "commit": "53fe045906df8eeb07cb77b078fc93acda6c90b8" },

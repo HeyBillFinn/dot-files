@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Fetch a Slack thread via Stripe's toolshed proxy and output as Jira markdown."""
+
+import argparse
+import json
+import re
+import socket
+import subprocess
+import sys
+
+
+PROXY_SOCKET = f"{__import__('os').path.expanduser('~')}/.stripeproxy"
+TOOLSHED_URL = "http://toolshed.corp.stripe.com"
+
+
+def http_via_unix_socket(socket_path, method, path, body=None, headers=None):
+    """Make an HTTP request over a unix socket."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(socket_path)
+
+    headers = headers or {}
+    headers.setdefault("Host", "toolshed.corp.stripe.com")
+    headers.setdefault("Content-Type", "application/json")
+    headers.setdefault("Accept", "application/json")
+    headers.setdefault("X-Requested-With", "curl")
+
+    body_bytes = json.dumps(body).encode() if body else b""
+    if body_bytes:
+        headers["Content-Length"] = str(len(body_bytes))
+
+    request_line = f"{method} {path} HTTP/1.1\r\n"
+    header_lines = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+    raw_request = (request_line + header_lines + "\r\n").encode() + body_bytes
+
+    sock.sendall(raw_request)
+
+    response = b""
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+
+    sock.close()
+
+    # Parse HTTP response
+    header_end = response.find(b"\r\n\r\n")
+    if header_end == -1:
+        sys.exit("Invalid HTTP response from toolshed")
+    resp_body = response[header_end + 4:]
+
+    # Handle chunked transfer encoding
+    status_line = response[:response.find(b"\r\n")].decode()
+    if b"Transfer-Encoding: chunked" in response[:header_end]:
+        resp_body = decode_chunked(resp_body)
+
+    return resp_body.decode()
+
+
+def decode_chunked(data):
+    """Decode chunked transfer encoding."""
+    result = b""
+    while data:
+        # Find chunk size line
+        line_end = data.find(b"\r\n")
+        if line_end == -1:
+            break
+        size_str = data[:line_end].decode().strip()
+        if not size_str:
+            data = data[line_end + 2:]
+            continue
+        chunk_size = int(size_str, 16)
+        if chunk_size == 0:
+            break
+        chunk_start = line_end + 2
+        result += data[chunk_start:chunk_start + chunk_size]
+        data = data[chunk_start + chunk_size + 2:]
+    return result
+
+
+def call_toolshed_tool(tool_name, arguments):
+    """Call a toolshed MCP tool via the stripe proxy."""
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments,
+        },
+    }
+
+    resp_text = http_via_unix_socket(
+        PROXY_SOCKET,
+        "POST",
+        "/mcp/slack",
+        body=mcp_request,
+    )
+
+    try:
+        resp = json.loads(resp_text)
+    except json.JSONDecodeError:
+        sys.exit(f"Failed to parse toolshed response: {resp_text[:500]}")
+
+    if "error" in resp:
+        sys.exit(f"Toolshed error: {resp['error']}")
+
+    result = resp.get("result", {})
+    if result.get("isError"):
+        content = result.get("content", [{}])
+        msg = content[0].get("text", "Unknown error") if content else "Unknown error"
+        sys.exit(f"Tool error: {msg}")
+
+    content = result.get("content", [])
+    for item in content:
+        if item.get("type") == "text":
+            return item["text"]
+
+    return ""
+
+
+def parse_slack_url(url):
+    """Extract channel ID, thread timestamp, and optional message timestamp from a Slack URL.
+
+    A thread URL with ?thread_ts=X&cid=Y points to a specific message in a thread.
+    A plain /archives/CHANNEL/pTIMESTAMP points to either a thread parent or a specific message.
+    """
+    match = re.match(r"https?://[^/]+/archives/([A-Z0-9]+)/p(\d+)(?:\?(.+))?", url)
+    if not match:
+        sys.exit(f"Could not parse Slack URL: {url}")
+    channel = match.group(1)
+    raw_ts = match.group(2)
+    msg_ts = raw_ts[:10] + "." + raw_ts[10:]
+
+    # Check for thread_ts in query params (indicates this links to a reply in a thread)
+    query = match.group(3) or ""
+    thread_ts = None
+    for param in query.split("&"):
+        if param.startswith("thread_ts="):
+            thread_ts = param.split("=", 1)[1]
+            break
+
+    if thread_ts:
+        # URL points to a specific reply; thread_ts is the parent
+        return channel, thread_ts, msg_ts
+    else:
+        # URL points to the thread parent (or a standalone message)
+        return channel, msg_ts, msg_ts
+
+
+def slack_to_jira(text):
+    """Convert Slack mrkdwn to Jira wiki markup."""
+    # Links: <url|label> -> [label|url], <url> -> [url]
+    def replace_link(m):
+        content = m.group(1)
+        if "|" in content:
+            url, label = content.split("|", 1)
+            return f"[{label}|{url}]"
+        return f"[{content}]"
+
+    text = re.sub(r"<((?:https?://|mailto:)[^>]+)>", replace_link, text)
+
+    # User mentions: <@U123> or <@U123|name> -> @name
+    def replace_user(m):
+        parts = m.group(1)
+        if "|" in parts:
+            return f"@{parts.split('|', 1)[1]}"
+        return f"@{parts}"
+
+    text = re.sub(r"<@([^>]+)>", replace_user, text)
+
+    # Channel mentions: <#C123|name> -> #name
+    def replace_channel(m):
+        parts = m.group(1)
+        if "|" in parts:
+            return f"#{parts.split('|', 1)[1]}"
+        return f"#{parts}"
+
+    text = re.sub(r"<#([^>]+)>", replace_channel, text)
+
+    # Code blocks: ```code``` -> {code}code{code}
+    text = re.sub(r"```(.*?)```", r"{code}\1{code}", text, flags=re.DOTALL)
+
+    # Inline code: `code` -> {{code}}
+    text = re.sub(r"`([^`]+)`", r"{{\1}}", text)
+
+    # Strikethrough: ~text~ -> -text-
+    text = re.sub(r"~([^~]+)~", r"-\1-", text)
+
+    # Bullet lists
+    text = re.sub(r"^[•]\s*", "* ", text, flags=re.MULTILINE)
+    text = re.sub(r"^[◦]\s*", "** ", text, flags=re.MULTILINE)
+
+    return text
+
+
+def format_messages(raw_text, from_ts=None, single=False):
+    """Parse the toolshed response and format as Jira markup.
+
+    If from_ts is set, only include messages with ts >= from_ts.
+    If single is True, only include the exact message matching from_ts.
+    """
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return slack_to_jira(raw_text)
+
+    if isinstance(data, dict) and "messages" in data:
+        messages = data["messages"]
+    elif isinstance(data, list):
+        messages = data
+    else:
+        return slack_to_jira(raw_text)
+
+    # Filter messages based on from_ts
+    if from_ts and single:
+        messages = [m for m in messages if (m.get("ts") or m.get("message_id") or "0") == from_ts]
+    elif from_ts:
+        messages = [m for m in messages if (m.get("ts") or m.get("message_id") or "0") >= from_ts]
+
+    lines = []
+    for msg in messages:
+        user = msg.get("user_name") or msg.get("user") or "unknown"
+        text = msg.get("text", "")
+        converted = slack_to_jira(text)
+        lines.append(f"*{user}:*\n{converted}")
+
+    return "\n\n".join(lines)
+
+
+def copy_to_clipboard(text):
+    """Copy text to macOS clipboard."""
+    try:
+        subprocess.run(["pbcopy"], input=text.encode(), check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Convert Slack thread to Jira markdown")
+    parser.add_argument("url", help="Slack message/thread URL")
+    parser.add_argument("--copy", "-c", action="store_true", help="Copy output to clipboard")
+    parser.add_argument("--raw", action="store_true", help="Print raw toolshed response for debugging")
+    parser.add_argument("--single", "-s", action="store_true", help="Only convert the single linked message")
+    parser.add_argument("--debug", "-d", action="store_true", help="Print debug info to stderr")
+    args = parser.parse_args()
+
+    def debug(msg):
+        if args.debug:
+            print(f"[DEBUG] {msg}", file=sys.stderr)
+
+    channel, thread_ts, from_ts = parse_slack_url(args.url)
+    debug(f"Parsed URL: channel={channel}, thread_ts={thread_ts}, from_ts={from_ts}")
+    debug(f"Socket path: {PROXY_SOCKET}")
+    debug(f"Socket exists: {__import__('os').path.exists(PROXY_SOCKET)}")
+
+    debug("Calling toolshed read_slack_message_thread...")
+    raw = call_toolshed_tool(
+        "read_slack_message_thread",
+        {"channel_id_or_name": channel, "thread_ts": thread_ts},
+    )
+    debug(f"Raw response length: {len(raw)}")
+    debug(f"Raw response (first 1000 chars): {raw[:1000]}")
+
+    if args.raw:
+        print(raw)
+        return
+
+    if args.single:
+        output = format_messages(raw, from_ts, single=True)
+    else:
+        output = format_messages(raw, from_ts)
+    debug(f"Formatted output length: {len(output)}")
+
+    if not output:
+        debug("No output produced. Check --raw to see the toolshed response.")
+
+    if args.copy:
+        if copy_to_clipboard(output):
+            print(f"Copied to clipboard.", file=sys.stderr)
+        else:
+            print("Failed to copy to clipboard, printing instead:", file=sys.stderr)
+            print(output)
+    else:
+        print(output)
+
+
+if __name__ == "__main__":
+    main()

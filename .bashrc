@@ -168,6 +168,7 @@ alias readersetupdatesdisabled='export ANDROID_SERIAL=$(reader_device); ./script
 alias readersetupdatesenabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control-check.sh setUpdatesEnabled true && echo SUCCESS'
 alias readergenerateregistrationcode='./scripts/device-owner/reader-control.sh generateRegistrationCode && adb logcat -s DebugUpdaterControlReceiver -v raw'
 alias clauded='claude --dangerously-skip-permissions'
+alias cl='claude --dangerously-skip-permissions'
 
 
 create_devbox() {
@@ -525,6 +526,7 @@ _adbstandalonepid() {
 _adbdonationstestapppid() {
   adb shell ps | grep com.stripe.donationstestapp | tr -s "[:space:]" ' ' | cut -d' ' -f2
 }
+
 type_slowly() {
     text="$1"
     consecutive_fast=0
@@ -1559,6 +1561,7 @@ curlpaymentintentcreate() {
   echo "$pi_output"
   PAYMENT_INTENT_ID=$(echo "$pi_output" | jq -r -c .id)
   export PAYMENT_INTENT_ID
+  echo "Setting PI ID: $PAYMENT_INTENT_ID"
 }
 
 curlreadercollectwithsurchargenotice() {
@@ -1576,6 +1579,8 @@ curlreadercollectwithsurchargenotice() {
 curlreadercollect() {
   if [ "$#" -eq 1 ]; then
     PI_ID="$1"
+  elif [ -n "$PAYMENT_INTENT_ID" ]; then
+    PI_ID="$PAYMENT_INTENT_ID"
   else
     curlpaymentintentcreate
     PI_ID="$PAYMENT_INTENT_ID"
