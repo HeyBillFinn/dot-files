@@ -309,7 +309,12 @@ def handle_build(ref):
     stdout = result.stdout.decode("utf-8")
     # if "Two-Factor Authentication Required" in stdout:
     #     subprocess.run(["sc-2fa"])
-    raw_build = json.loads(stdout)["build"]
+    try:
+        raw_build = json.loads(stdout)["build"]
+    except json.decoder.JSONDecodeError:
+        print("error decoding stdout:")
+        print(repr(stdout))
+        raise
     return [convert_build_to_job(time.time(), raw_build)]
 
 
@@ -326,7 +331,7 @@ def handle_build_group(ref):
         raw_builds = json.loads(stdout)["builds"]
     except json.decoder.JSONDecodeError:
         print("error decoding stdout:")
-        print(stdout)
+        print(repr(stdout))
         raise
     jobs = []
     now = time.time()

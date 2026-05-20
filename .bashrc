@@ -1262,8 +1262,35 @@ curlaccountget() {
   echo "$curl_output" | jq .id
 }
 alias stripelistenwebhooks='stripe listen --forward-to localhost:8000/webhook'
-alias curllocationslist='type curllocationslist; curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY": | jq -r -c '"'"'.data[] | [.display_name, .id]'"'"''
-alias curllocationslisttest='type curllocationslisttest; curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY": | jq -r -c '"'"'.data[] | select((.display_name | contains("test")) or (.display_name | contains("Home"))) | [.display_name, .id]'"'"''
+curllocationslist() {
+  type curllocationslist
+  local output
+  output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY":)
+  echo "$output" | jq -r -c '.data[] | [.display_name, .id]'
+  local count
+  count=$(echo "$output" | jq '.data | length')
+  if [ "$count" -eq 1 ]; then
+    LOCATION_ID=$(echo "$output" | jq -r '.data[0].id')
+    export LOCATION_ID
+    echo "Only one location found. Setting LOCATION_ID=$LOCATION_ID"
+  fi
+}
+
+curllocationslisttest() {
+  type curllocationslisttest
+  local output
+  output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY":)
+  local filtered
+  filtered=$(echo "$output" | jq -r -c '.data[] | select((.display_name | contains("test")) or (.display_name | contains("Home"))) | [.display_name, .id]')
+  echo "$filtered"
+  local count
+  count=$(echo "$filtered" | wc -l | tr -d ' ')
+  if [ -n "$filtered" ] && [ "$count" -eq 1 ]; then
+    LOCATION_ID=$(echo "$filtered" | jq -r '.[1]')
+    export LOCATION_ID
+    echo "Only one location found. Setting LOCATION_ID=$LOCATION_ID"
+  fi
+}
 
 curlwebhooklist() {
   curl -s -H "Stripe-Version: 2025-05-28.basil;" ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/webhook_endpoints" -u "$SECRET_KEY":
@@ -1372,21 +1399,56 @@ curlreaderregister() {
   type curlreaderregister
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
-  else
-    output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/terminal/readers -u "$SECRET_KEY:" -d location="$LOCATION_ID" -d registration_code="$1" -d label='billfinn')
-    echo "$output"
-    READER_ID=$(echo "$output" | jq -r -c .id)
-    export READER_ID
-    LOCATION_ID=$(echo "$output" | jq -r -c .location)
-    export LOCATION_ID
-    echo "Setting location ID: $LOCATION_ID"
-    location_output=$(curllocationsget)
-    config_id=$(echo "$location_output" | jq -r -c '.configuration_overrides // empty')
-    if [ -n "$config_id" ]; then
-      echo "Setting config ID: $config_id"
-      CONFIGURATION_ID="$config_id"
-      export CONFIGURATION_ID
+    return 1
+  fi
+
+  if [ -z "$LOCATION_ID" ]; then
+    echo "LOCATION_ID not set. Fetching locations..."
+    local loc_output
+    loc_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY":)
+    local loc_count
+    loc_count=$(echo "$loc_output" | jq '.data | length')
+
+    if [ "$loc_count" -eq 0 ]; then
+      echo "No locations found. Create one first with curllocationscreate."
+      return 1
+    elif [ "$loc_count" -eq 1 ]; then
+      LOCATION_ID=$(echo "$loc_output" | jq -r '.data[0].id')
+      export LOCATION_ID
+      echo "Only one location found. Using LOCATION_ID=$LOCATION_ID"
+    else
+      echo "Multiple locations found. Select one:"
+      local i=1
+      echo "$loc_output" | jq -r -c '.data[] | [.display_name, .id]' | while IFS= read -r line; do
+        echo "  $i) $line"
+        i=$((i + 1))
+      done
+      printf "Enter number: "
+      local selection
+      read -r selection
+      LOCATION_ID=$(echo "$loc_output" | jq -r ".data[$((selection - 1))].id")
+      if [ "$LOCATION_ID" = "null" ] || [ -z "$LOCATION_ID" ]; then
+        echo "Invalid selection."
+        return 1
+      fi
+      export LOCATION_ID
+      echo "Using LOCATION_ID=$LOCATION_ID"
     fi
+  fi
+
+  output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/terminal/readers -u "$SECRET_KEY:" -d location="$LOCATION_ID" -d registration_code="$1" -d label='billfinn')
+  echo "$output"
+  READER_ID=$(echo "$output" | jq -r -c .id)
+  export READER_ID
+  LOCATION_ID=$(echo "$output" | jq -r -c .location)
+  export LOCATION_ID
+  echo "Setting location ID: $LOCATION_ID"
+  location_output=$(curllocationsget)
+  config_id=$(echo "$location_output" | jq -r -c '.configuration_overrides // empty')
+  if [ -n "$config_id" ]; then
+    echo "Setting config ID: $config_id"
+    CONFIGURATION_ID="$config_id"
+    export CONFIGURATION_ID
   fi
 }
 
@@ -1907,6 +1969,12 @@ alias jiramyopenstaletickets='ensure_sc2fa && jira list --query="assignee=curren
 alias grcc='type grcc; ./gradlew --configuration-cache'
 alias grclean='type grclean; ./gradlew --no-build-cache --rerun-tasks'
 alias cibuildall='pay ci:build --all'
+
+cidownloadlogs()
+{
+  sc-curl "$1/plaintext_logs" > plaintext_logs.log
+  echo "Logs stored at plaintext_logs.log"
+}
 
 gfb()
 {

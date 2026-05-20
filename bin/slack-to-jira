@@ -2,6 +2,8 @@
 """Fetch a Slack thread via Stripe's toolshed proxy and output as Jira markdown."""
 
 import argparse
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import json
 import re
 import socket
@@ -222,8 +224,16 @@ def format_messages(raw_text, from_ts=None, single=False):
     for msg in messages:
         user = msg.get("user_name") or msg.get("user") or "unknown"
         text = msg.get("text", "")
+        ts = msg.get("ts") or msg.get("message_id") or ""
+        timestamp = ""
+        if ts:
+            try:
+                dt = datetime.fromtimestamp(float(ts), tz=ZoneInfo("America/Los_Angeles"))
+                timestamp = f" ({dt.strftime('%Y-%m-%d %-I:%M %p PT')})"
+            except (ValueError, OSError):
+                pass
         converted = slack_to_jira(text)
-        lines.append(f"*{user}:*\n{converted}")
+        lines.append(f"*{user}{timestamp}:*\n{converted}")
 
     return "\n\n".join(lines)
 
