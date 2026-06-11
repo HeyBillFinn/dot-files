@@ -783,7 +783,14 @@ gdm() {
   #   comparisonBranch="$baseBranch"
   # fi
   # git diff "$comparisonBranch"...HEAD
-  git diff "$baseBranch"...HEAD
+  local png_files
+  png_files=$(git diff --name-only "$baseBranch"...HEAD "$@" | rg '\.png$')
+  if [[ -n "$png_files" ]]; then
+    echo "Ignoring PNG files:"
+    echo "$png_files" | sed 's/^/  /'
+    echo ""
+  fi
+  git diff "$baseBranch"...HEAD "$@" -- . ':(exclude)*.png'
 }
 
 gfbandopenpr() {
@@ -1626,6 +1633,19 @@ curlpaymentintentcreate() {
   echo "Setting PI ID: $PAYMENT_INTENT_ID"
 }
 
+curlpaymentintentupdate() {
+  amount="5100"
+  currency="usd"
+  if [ "$#" -ge 1 ]; then
+    amount="$1"
+  fi
+  if [ "$#" -ge 2 ]; then
+    currency="$2"
+  fi
+  curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} -X POST "https://api.stripe.com/v1/payment_intents/$PAYMENT_INTENT_ID" -u "$SECRET_KEY:" -d amount="$amount" -d currency="$currency")
+  echo "$curl_output"
+}
+
 curlreadercollectwithsurchargenotice() {
   if [ "$#" -eq 1 ]; then
     PI_ID="$1"
@@ -1662,11 +1682,16 @@ curlreaderconfirm() {
 }
 
 curlreaderconfirmwithsurcharge() {
-  if [ "$#" -ne 1 ]; then
-    echo "Illegal number of parameters"
+  if [ "$#" -eq 1 ]; then
+    PI_ID="$1"
+  elif [ -n "$PAYMENT_INTENT_ID" ]; then
+    PI_ID="$PAYMENT_INTENT_ID"
+  else
+    echo "No PI ID supplied and PAYMENT_INTENT_ID is not set"
     return 1
   fi
-  curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/readers/$READER_ID/confirm_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$1" -d "confirm_config[amount_surcharge]"=21)
+  curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/readers/$READER_ID/confirm_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$PI_ID" -d "confirm_config[surcharge][consent][collection]"="enabled" -d "confirm_config[surcharge][consent][notice]"="Surcharge consent" -d "confirm_config[surcharge][amount]"=21)
+  # curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/readers/$READER_ID/confirm_payment_intent" -u "$SECRET_KEY:" -d payment_intent="$PI_ID" -d "confirm_config[amount_surcharge]"=21)
   echo "$curl_output"
 }
 
@@ -1894,7 +1919,16 @@ alias cfchanged='cf `git diff --name-only --diff-filter=d master | grep -E "\.(m
 
 alias g='git'
 alias gd='git diff --no-prefix'
-alias d='git diff'
+d() {
+  local png_files
+  png_files=$(git diff --name-only "$@" | rg '\.png$')
+  if [[ -n "$png_files" ]]; then
+    echo "Ignoring PNG files:"
+    echo "$png_files" | sed 's/^/  /'
+    echo ""
+  fi
+  git diff "$@" -- . ':(exclude)*.png'
+}
 alias glm='git log -p $(default_branch)..HEAD'
 alias glbf='git log -p --author=billfinn'
 alias glp='git log -p --follow'
@@ -2097,4 +2131,48 @@ safekill()
 {
   pgrep -a $1
   killall -i $1
+}
+
+gitpushtmp()
+{
+  if [ "$#" -gt 2 ]; then
+    echo "Illegal number of parameters"
+    return 1
+  fi
+  branchName=$(git rev-parse --abbrev-ref HEAD)
+  if [[ $branchName =~ ^master$ ]] || [[ $branchName =~ ^main$ ]]; then
+    echo "error: on master or main branch"
+    return 1
+  fi
+  tmpBranchName=$(echo $branchName | sed 's/^/tmp-/')
+  branchExists=$(git rev-parse --verify $tmpBranchName 2>/dev/null)
+  if [[ -z $branchExists ]]; then
+    echo "branch $tmpBranchName doesn't exist; creating"
+    git branch $tmpBranchName
+  fi
+
+  if [ "$#" -gt 0 ]; then
+    if [ "$#" -eq 2 ]; then
+      # Ignore $1; we just use it as a flag to indicate "all"
+      for hash in `git log --reverse --format='%H' $2^...HEAD`; do
+        echo "force pushing $tmpBranchName to $hash"
+        CMD="git push --no-verify -f -u origin $hash:$tmpBranchName"
+      done
+    else
+      echo "force pushing $tmpBranchName to $1"
+      CMD="git push --no-verify -f -u origin $1:$tmpBranchName"
+    fi
+  else
+    echo "updating $tmpBranchName to $branchName"
+    git branch -f $tmpBranchName $branchName
+    echo "force pushing $tmpBranchName"
+    if ! [[ $tmpBranchName =~ ^tmp.*$ ]]; then
+      echo "error: tmp branch incorrectly formatted"
+      return 1
+    fi
+    # Don't skip verify because we're at HEAD
+    CMD="git push -u origin $tmpBranchName -f"
+  fi
+  echo $CMD
+  $CMD || notify_failed
 }

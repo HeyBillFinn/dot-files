@@ -159,6 +159,8 @@ pserotta
 pserotta-stripe
 pzhang
 pzhang-stripe
+qiang
+qiang-stripe
 rahuliyer
 rahuliyer-stripe
 refuhoo
@@ -196,6 +198,7 @@ skhemani-stripe
 stevenmacneil
 stevenmacneil-stripe
 stripe-internal/codeowners-developer-environments
+stripe-internal/codeowners-terminal-commerce-experience
 stripe-internal/terminal-android-sdk-release-dris
 stripe-internal/terminal-commercex
 stripe-internal/terminal-device-payments

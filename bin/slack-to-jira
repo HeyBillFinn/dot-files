@@ -250,7 +250,7 @@ def copy_to_clipboard(text):
 def main():
     parser = argparse.ArgumentParser(description="Convert Slack thread to Jira markdown")
     parser.add_argument("url", help="Slack message/thread URL")
-    parser.add_argument("--copy", "-c", action="store_true", help="Copy output to clipboard")
+    parser.add_argument("--stdout", action="store_true", help="Print output to stdout instead of copying to clipboard")
     parser.add_argument("--raw", action="store_true", help="Print raw toolshed response for debugging")
     parser.add_argument("--single", "-s", action="store_true", help="Only convert the single linked message")
     parser.add_argument("--debug", "-d", action="store_true", help="Print debug info to stderr")
@@ -286,14 +286,14 @@ def main():
     if not output:
         debug("No output produced. Check --raw to see the toolshed response.")
 
-    if args.copy:
+    if args.stdout:
+        print(output)
+    else:
         if copy_to_clipboard(output):
             print(f"Copied to clipboard.", file=sys.stderr)
         else:
             print("Failed to copy to clipboard, printing instead:", file=sys.stderr)
             print(output)
-    else:
-        print(output)
 
 
 if __name__ == "__main__":

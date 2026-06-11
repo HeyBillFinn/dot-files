@@ -1,6 +1,6 @@
 {
   "JavaScript-Indent": { "branch": "master", "commit": "8e9aa08189d420d9384f38a11ea89a0bff846e6d" },
-  "ale": { "branch": "master", "commit": "2a3af30fb6a725ec7215435369b310b1d2dc4c09" },
+  "ale": { "branch": "master", "commit": "178fe113564d31cba304263765aeb21e7ed23a7e" },
   "ctrlp.vim": { "branch": "master", "commit": "3739dcd638f457559d5a1ae1e398276175694e4b" },
   "github-vim": { "branch": "master", "commit": "8223b6fc77e7323d1476cc67f22b1c847de51beb" },
   "kotlin-vim": { "branch": "master", "commit": "53fe045906df8eeb07cb77b078fc93acda6c90b8" },
@@ -9,7 +9,7 @@
   "nvim-treesitter": { "branch": "main", "commit": "4916d6592ede8c07973490d9322f187e07dfefac" },
   "plenary.nvim": { "branch": "master", "commit": "74b06c6c75e4eeb3108ec01852001636d85a932b" },
   "pythonhelper": { "branch": "master", "commit": "f2416531c01ba4c49bc8932946d905adb4088f84" },
-  "render-markdown.nvim": { "branch": "main", "commit": "629eb9533ec989d9d5c6cab8f3ad5372422c24e0" },
+  "render-markdown.nvim": { "branch": "main", "commit": "5adf0895310c1904e5abfaad40a2baad7fe44a07" },
   "tabular": { "branch": "master", "commit": "12437cd1b53488e24936ec4b091c9324cafee311" },
   "telescope-fzf-native.nvim": { "branch": "main", "commit": "b25b749b9db64d375d782094e2b9dce53ad53a40" },
   "telescope.nvim": { "branch": "0.1.x", "commit": "a0bbec21143c7bc5f8bb02e0005fa0b982edc026" },
