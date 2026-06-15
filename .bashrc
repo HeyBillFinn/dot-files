@@ -928,7 +928,23 @@ gpush() {
   if [[ "$localSha" == "$remoteSha" ]]; then
     echo "already up-to-date, skipping push."
   else
-    git push --no-verify --force-with-lease -u origin HEAD
+    # Never force push to an existing open, non-draft PR
+    local pushArgs="--no-verify -u origin HEAD"
+    local prJson
+    prJson=$(GH_HOST="$(gh_hostname)" gh pr view --json state,isDraft 2>/dev/null)
+    if [[ -n "$prJson" ]]; then
+      local prState prDraft
+      prState=$(echo "$prJson" | jq -r '.state')
+      prDraft=$(echo "$prJson" | jq -r '.isDraft')
+      if [[ "$prState" == "OPEN" && "$prDraft" == "false" ]]; then
+        echo "non-draft PR is open, using regular push (no force)."
+      else
+        pushArgs="--force-with-lease $pushArgs"
+      fi
+    else
+      pushArgs="--force-with-lease $pushArgs"
+    fi
+    git push $pushArgs
     if ! [[ $? -eq 0 ]]; then
       echo "error: failed to push branch"
       return 1
@@ -940,7 +956,7 @@ gpush() {
   local prcheck=$SECONDS
   if GH_HOST="$(gh_hostname)" gh pr view &>/dev/null; then
     echo "pr check: $((SECONDS - prcheck))s"
-    echo "PR already exists, force push done. (total: $((SECONDS - start))s)"
+    echo "PR already exists, push done. (total: $((SECONDS - start))s)"
     return 0
   fi
   echo "pr check: $((SECONDS - prcheck))s"

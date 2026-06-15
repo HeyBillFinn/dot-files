@@ -150,6 +150,8 @@ nicor
 nicor-stripe
 nk
 nk-stripe
+nolanpollack
+nolanpollack-stripe
 padelsbach
 padelsbach-stripe
 patersond

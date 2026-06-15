@@ -307,14 +307,46 @@ def handle_build(ref):
         stderr=subprocess.STDOUT,
     )
     stdout = result.stdout.decode("utf-8")
-    # if "Two-Factor Authentication Required" in stdout:
-    #     subprocess.run(["sc-2fa"])
     try:
         raw_build = json.loads(stdout)["build"]
     except json.decoder.JSONDecodeError:
         print("error decoding stdout:")
         print(repr(stdout))
         raise
+
+    if verbose:
+        print(f"[verbose] build job_name: {raw_build['job_name']}")
+
+    if raw_build["job_name"] == "stripe-internal-android-selectivity":
+        commit_sha = raw_build.get("git_commit_sha")
+        if commit_sha:
+            bg_result = subprocess.run(
+                ["sc-curl", "-s", f"cibot.corp.stripe.com/user/build_groups?stripe_user=billfinn&limit=50"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            bg_stdout = bg_result.stdout.decode("utf-8")
+            try:
+                all_bgs = json.loads(bg_stdout)["build_groups"]
+                matching_bgs = [bg for bg in all_bgs if bg["commit_id"] == commit_sha]
+                # Find which build group contains this build
+                for bg in matching_bgs:
+                    bg_builds_result = subprocess.run(
+                        ["sc-curl", "-s", f"cibot.corp.stripe.com/api/build_groups/{bg['token']}"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                    )
+                    bg_builds = json.loads(bg_builds_result.stdout.decode("utf-8"))["builds"]
+                    build_tokens = [b["token"] for b in bg_builds]
+                    if verbose:
+                        print(f"[verbose] bg {bg['token']} has builds: {build_tokens}")
+                    if ref in build_tokens:
+                        print(f"[selectivity] Build {ref} is a selectivity job, watching build group {bg['token']} instead.")
+                        return [convert_build_to_job(time.time(), b) for b in bg_builds]
+            except Exception as e:
+                if verbose:
+                    print(f"[verbose] error finding build group: {e}")
+
     return [convert_build_to_job(time.time(), raw_build)]
 
 
@@ -455,6 +487,9 @@ parser.add_argument("ref", type=str, nargs="?", help="Git commit hash to watch")
 parser.add_argument(
     "--force_wait", action="store_true", help="If true, forcibly waits."
 )
+parser.add_argument(
+    "--verbose", "-v", action="store_true", help="Enable verbose debug logging."
+)
 args = parser.parse_args()
 if args.ref is None:
     ref = (
@@ -470,6 +505,7 @@ else:
     ref = args.ref
 
 force_wait = args.force_wait
+verbose = args.verbose
 
 while True:
     print(f"{datetime.now()} running ...")

@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-Review changed Paparazzi screenshot directories one at a time.
+Interactive curses-based tool for reviewing changed Paparazzi screenshot directories.
 
-For each directory with changes, opens `git diff-image` to show the visual
-diff, then prompts:
-  [u]ndo    — git checkout -- <dir>  (revert changes)
-  [s]tage   — git add <dir>
-  [q]uit    — stop reviewing
+Shows a list of directories with changed screenshots. Navigate and act:
+  [j/k/arrows] navigate
+  [Enter/r]    review — open git diff-image for the directory
+  [u]          undo — git checkout -- <dir>
+  [s]          stage — git add <dir>
+  [g/G]        jump to top/bottom
+  [q]          quit
 
 Usage:
-  ./scripts/review-screenshots.py [snapshot-images-dir]
-
-If no directory is given, discovers all unstaged .png files and groups them
-into directories automatically.
-
-Example:
-  ./scripts/review-screenshots.py
-  ./scripts/review-screenshots.py standalonepos/modules/views/screenshot-tests/src/test/snapshots/images/
+  review-screenshots.py [snapshot-images-dir]
 """
 
+import curses
 import subprocess
 import sys
 
 
+STATUS_PENDING = "pending"
+STATUS_STAGED = "staged"
+STATUS_REVERTED = "reverted"
+
+
 def get_changed_png_lines(base_path=None):
-    """Get unstaged changed .png file paths from git diff."""
     cmd = ["git", "diff", "--name-only", "--diff-filter=M", "--", "*.png"]
     if base_path:
         cmd = ["git", "diff", "--name-only", "--", base_path]
@@ -33,9 +33,6 @@ def get_changed_png_lines(base_path=None):
 
 
 def extract_dir(line):
-    """Extract the grouping directory from a changed file path."""
-    # Extract up to: .../images/<TestClassName>/images/
-    # The path pattern is: <base>/images/<TestClass>/images/<file>.png
     parts = line.split("/images/")
     if len(parts) >= 3:
         return f"{parts[0]}/images/{parts[1]}/images"
@@ -46,7 +43,6 @@ def extract_dir(line):
 
 
 def get_changed_dirs(base_path=None):
-    """Get unique TestClass/images/ directories that have changed PNGs."""
     lines = get_changed_png_lines(base_path)
     seen = set()
     dirs = []
@@ -59,7 +55,6 @@ def get_changed_dirs(base_path=None):
 
 
 def count_files(directory):
-    """Count changed files in a directory."""
     result = subprocess.run(
         ["git", "diff", "--name-only", "--", directory],
         capture_output=True,
@@ -68,87 +63,167 @@ def count_files(directory):
     return len(result.stdout.strip().splitlines())
 
 
-def main():
-    base_path = sys.argv[1] if len(sys.argv) >= 2 else None
-    dirs = get_changed_dirs(base_path)
+def draw_list(stdscr, items, cursor, scroll_offset):
+    height, width = stdscr.getmaxyx()
+    header_lines = 3
+    footer_lines = 3
+    list_height = height - header_lines - footer_lines
 
-    if not dirs:
-        print("No changed screenshot directories found.")
+    staged = sum(1 for it in items if it["status"] == STATUS_STAGED)
+    reverted = sum(1 for it in items if it["status"] == STATUS_REVERTED)
+    pending = sum(1 for it in items if it["status"] == STATUS_PENDING)
+
+    title = f" Screenshot Review — {len(items)} dir(s): {pending} pending, {staged} staged, {reverted} reverted "
+    stdscr.attron(curses.A_BOLD)
+    stdscr.addnstr(0, 0, title.center(width), width - 1)
+    stdscr.attroff(curses.A_BOLD)
+
+    if not items:
+        stdscr.addnstr(3, 2, "No changed screenshot directories found.", width - 4)
         return
 
-    print(f"Found {len(dirs)} changed directory(ies).\n")
+    col_headers = f"{'#':>5}  {'STATUS':<10} {'FILES':>5}  DIRECTORY"
+    stdscr.attron(curses.A_DIM)
+    stdscr.addnstr(1, 0, col_headers.ljust(width - 1), width - 1)
+    stdscr.attroff(curses.A_DIM)
 
-    undone = 0
-    staged = 0
-    skipped = 0
-    review_all = False
+    for i in range(list_height):
+        idx = scroll_offset + i
+        row = header_lines + i
+        if idx >= len(items):
+            stdscr.move(row, 0)
+            stdscr.clrtoeol()
+            continue
 
-    for i, dir_path in enumerate(dirs, 1):
-        n_files = count_files(dir_path)
-        print(f"\n[{i}/{len(dirs)}] {dir_path} ({n_files} file(s))")
-        print("-" * 60)
+        it = items[idx]
+        status_str = it["status"]
+        line = f" {idx + 1:>4}. {status_str:<10} {it['count']:>5}  {it['path']}"
 
-        if not review_all:
-            # Pre-review prompt: decide whether to open diff-image
-            while True:
-                try:
-                    choice = input("[r]eview / [a]ll / [u]ndo / [s]kip / [q]uit: ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    print("\nQuitting.")
-                    return
+        if idx == cursor:
+            stdscr.attron(curses.color_pair(1))
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+            stdscr.attroff(curses.color_pair(1))
+        elif it["status"] == STATUS_STAGED:
+            stdscr.attron(curses.color_pair(2))
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+            stdscr.attroff(curses.color_pair(2))
+        elif it["status"] == STATUS_REVERTED:
+            stdscr.attron(curses.color_pair(3))
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+            stdscr.attroff(curses.color_pair(3))
+        else:
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
 
-                if choice in ("r", "review"):
-                    break
-                elif choice in ("a", "all"):
-                    review_all = True
-                    break
-                elif choice in ("u", "undo"):
-                    subprocess.run(["git", "checkout", "--", dir_path])
-                    print(f"  Reverted {dir_path}")
-                    undone += 1
-                    break
-                elif choice in ("s", "skip"):
-                    print(f"  Skipped {dir_path}")
-                    skipped += 1
-                    break
-                elif choice in ("q", "quit"):
-                    print(f"\nStopped. Staged: {staged}, Reverted: {undone}, "
-                          f"Skipped: {skipped}, Remaining: {len(dirs) - i + 1}")
-                    return
-                else:
-                    print("  Invalid choice. Enter r, a, u, s, or q.")
+    help_row = height - 2
+    help_text = " [j/k] navigate  [Enter/r] review  [u] undo  [s] stage  [U] undo all pending  [g/G] top/bottom  [q] quit"
+    stdscr.attron(curses.A_DIM)
+    stdscr.addnstr(help_row, 0, help_text.center(width), width - 1)
+    stdscr.attroff(curses.A_DIM)
 
-            if choice in ("u", "undo", "s", "skip"):
-                continue
 
-        # Show visual diff and then prompt for action
-        subprocess.run(["git", "diff-image", dir_path])
+def review_dir(stdscr, dir_path):
+    curses.endwin()
+    subprocess.run(["git", "diff-image", dir_path])
+    stdscr = curses.initscr()
+    curses.noecho()
+    curses.cbreak()
+    stdscr.keypad(True)
+    curses.curs_set(0)
+    return stdscr
 
-        while True:
-            try:
-                choice = input("\n[u]ndo / [s]tage / [q]uit: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print("\nQuitting.")
-                return
 
-            if choice in ("u", "undo"):
-                subprocess.run(["git", "checkout", "--", dir_path])
-                print(f"  Reverted {dir_path}")
-                undone += 1
-                break
-            elif choice in ("s", "stage"):
-                subprocess.run(["git", "add", dir_path])
-                print(f"  Staged {dir_path}")
-                staged += 1
-                break
-            elif choice in ("q", "quit"):
-                print(f"\nStopped. Staged: {staged}, Reverted: {undone}, "
-                      f"Skipped: {skipped}, Remaining: {len(dirs) - i + 1}")
-                return
-            else:
-                print("  Invalid choice. Enter u, s, or q.")
+def curses_main(stdscr, base_path):
+    curses.curs_set(0)
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    curses.init_pair(2, curses.COLOR_GREEN, -1)
+    curses.init_pair(3, curses.COLOR_RED, -1)
 
-    print(f"\nDone! Staged: {staged}, Reverted: {undone}, Skipped: {skipped}")
+    dirs = get_changed_dirs(base_path)
+    items = [{"path": d, "count": count_files(d), "status": STATUS_PENDING} for d in dirs]
+
+    cursor = 0
+    scroll_offset = 0
+
+    while True:
+        height, width = stdscr.getmaxyx()
+        header_lines = 3
+        footer_lines = 3
+        list_height = height - header_lines - footer_lines
+
+        if items:
+            cursor = max(0, min(cursor, len(items) - 1))
+            if cursor < scroll_offset:
+                scroll_offset = cursor
+            elif cursor >= scroll_offset + list_height:
+                scroll_offset = cursor - list_height + 1
+
+        stdscr.clear()
+        draw_list(stdscr, items, cursor, scroll_offset)
+        stdscr.refresh()
+
+        key = stdscr.getch()
+
+        if key == curses.KEY_UP or key == ord("k"):
+            if cursor > 0:
+                cursor -= 1
+
+        elif key == curses.KEY_DOWN or key == ord("j"):
+            if cursor < len(items) - 1:
+                cursor += 1
+
+        elif key in (curses.KEY_PPAGE, 21):
+            cursor = max(0, cursor - list_height)
+
+        elif key in (curses.KEY_NPAGE, 4):
+            cursor = min(len(items) - 1, cursor + list_height)
+
+        elif key == ord("g"):
+            cursor = 0
+
+        elif key == ord("G"):
+            cursor = max(0, len(items) - 1)
+
+        elif key in (ord("\n"), ord("r")):
+            if items:
+                stdscr = review_dir(stdscr, items[cursor]["path"])
+
+        elif key == ord("u"):
+            if items and items[cursor]["status"] == STATUS_PENDING:
+                subprocess.run(
+                    ["git", "checkout", "--", items[cursor]["path"]],
+                    capture_output=True,
+                )
+                items[cursor]["status"] = STATUS_REVERTED
+                if cursor < len(items) - 1:
+                    cursor += 1
+
+        elif key == ord("U"):
+            for it in items:
+                if it["status"] == STATUS_PENDING:
+                    subprocess.run(
+                        ["git", "checkout", "--", it["path"]],
+                        capture_output=True,
+                    )
+                    it["status"] = STATUS_REVERTED
+
+        elif key == ord("s"):
+            if items and items[cursor]["status"] == STATUS_PENDING:
+                subprocess.run(
+                    ["git", "add", items[cursor]["path"]],
+                    capture_output=True,
+                )
+                items[cursor]["status"] = STATUS_STAGED
+                if cursor < len(items) - 1:
+                    cursor += 1
+
+        elif key == ord("q"):
+            break
+
+
+def main():
+    base_path = sys.argv[1] if len(sys.argv) >= 2 else None
+    curses.wrapper(lambda stdscr: curses_main(stdscr, base_path))
 
 
 if __name__ == "__main__":
