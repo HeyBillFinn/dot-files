@@ -439,7 +439,9 @@ def main(ref, force_wait):
     failed_jobs = []
     stopped_jobs = []
     for job, statuses in job_statuses.items():
-        if job not in IGNORED_JOB_FAILURES and all([s == "FAILED" for s in statuses]):
+        if any(s == "PASSED" for s in statuses):
+            continue
+        elif job not in IGNORED_JOB_FAILURES and all([s == "FAILED" for s in statuses]):
             failed_jobs.append(job)
         elif all([s == "STOPPED" for s in statuses]):
             stopped_jobs.append(job)

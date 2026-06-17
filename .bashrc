@@ -952,9 +952,11 @@ gpush() {
     echo "push: $((SECONDS - start))s"
   fi
 
-  # Check if a PR already exists for this branch
+  # Check if an open PR already exists for this branch
   local prcheck=$SECONDS
-  if GH_HOST="$(gh_hostname)" gh pr view &>/dev/null; then
+  local prState
+  prState=$(GH_HOST="$(gh_hostname)" gh pr view --json state --jq '.state' 2>/dev/null)
+  if [[ "$prState" == "OPEN" ]]; then
     echo "pr check: $((SECONDS - prcheck))s"
     echo "PR already exists, push done. (total: $((SECONDS - start))s)"
     return 0

@@ -5,16 +5,22 @@ Interactive curses-based tool for reviewing changed Paparazzi screenshot directo
 Shows a list of directories with changed screenshots. Navigate and act:
   [j/k/arrows] navigate
   [Enter/r]    review — open git diff-image for the directory
+  [S]          sample — open diff-image for one random file in the directory
   [u]          undo — git checkout -- <dir>
   [s]          stage — git add <dir>
   [g/G]        jump to top/bottom
   [q]          quit
 
 Usage:
-  review-screenshots.py [snapshot-images-dir]
+  review-screenshots.py [--branch] [snapshot-images-dir]
+
+Options:
+  --branch    Compare HEAD vs master instead of working directory changes
 """
 
+import argparse
 import curses
+import random
 import subprocess
 import sys
 
@@ -24,10 +30,15 @@ STATUS_STAGED = "staged"
 STATUS_REVERTED = "reverted"
 
 
-def get_changed_png_lines(base_path=None):
-    cmd = ["git", "diff", "--name-only", "--diff-filter=M", "--", "*.png"]
-    if base_path:
-        cmd = ["git", "diff", "--name-only", "--", base_path]
+def get_changed_png_lines(base_path=None, branch_mode=False):
+    if branch_mode:
+        cmd = ["git", "diff", "--name-only", "--diff-filter=M", "master...HEAD", "--", "*.png"]
+        if base_path:
+            cmd = ["git", "diff", "--name-only", "master...HEAD", "--", base_path]
+    else:
+        cmd = ["git", "diff", "--name-only", "--diff-filter=M", "--", "*.png"]
+        if base_path:
+            cmd = ["git", "diff", "--name-only", "--", base_path]
     result = subprocess.run(cmd, capture_output=True, text=True)
     return [l for l in result.stdout.strip().splitlines() if l]
 
@@ -42,8 +53,8 @@ def extract_dir(line):
         return line.rsplit("/", 1)[0]
 
 
-def get_changed_dirs(base_path=None):
-    lines = get_changed_png_lines(base_path)
+def get_changed_dirs(base_path=None, branch_mode=False):
+    lines = get_changed_png_lines(base_path, branch_mode)
     seen = set()
     dirs = []
     for line in lines:
@@ -54,13 +65,22 @@ def get_changed_dirs(base_path=None):
     return dirs
 
 
-def count_files(directory):
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "--", directory],
-        capture_output=True,
-        text=True,
-    )
+def count_files(directory, branch_mode=False):
+    if branch_mode:
+        cmd = ["git", "diff", "--name-only", "master...HEAD", "--", directory]
+    else:
+        cmd = ["git", "diff", "--name-only", "--", directory]
+    result = subprocess.run(cmd, capture_output=True, text=True)
     return len(result.stdout.strip().splitlines())
+
+
+def get_files_in_dir(directory, branch_mode=False):
+    if branch_mode:
+        cmd = ["git", "diff", "--name-only", "master...HEAD", "--", directory]
+    else:
+        cmd = ["git", "diff", "--name-only", "--", directory]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return [l for l in result.stdout.strip().splitlines() if l]
 
 
 def draw_list(stdscr, items, cursor, scroll_offset):
@@ -72,8 +92,9 @@ def draw_list(stdscr, items, cursor, scroll_offset):
     staged = sum(1 for it in items if it["status"] == STATUS_STAGED)
     reverted = sum(1 for it in items if it["status"] == STATUS_REVERTED)
     pending = sum(1 for it in items if it["status"] == STATUS_PENDING)
+    total_files = sum(it["count"] for it in items)
 
-    title = f" Screenshot Review — {len(items)} dir(s): {pending} pending, {staged} staged, {reverted} reverted "
+    title = f" Screenshot Review — {len(items)} dir(s), {total_files} file(s): {pending} pending, {staged} staged, {reverted} reverted "
     stdscr.attron(curses.A_BOLD)
     stdscr.addnstr(0, 0, title.center(width), width - 1)
     stdscr.attroff(curses.A_BOLD)
@@ -115,15 +136,18 @@ def draw_list(stdscr, items, cursor, scroll_offset):
             stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
 
     help_row = height - 2
-    help_text = " [j/k] navigate  [Enter/r] review  [u] undo  [s] stage  [U] undo all pending  [g/G] top/bottom  [q] quit"
+    help_text = " [j/k] navigate  [Enter/r] review  [S] sample  [u] undo  [s] stage  [U] undo all pending  [g/G] top/bottom  [q] quit"
     stdscr.attron(curses.A_DIM)
     stdscr.addnstr(help_row, 0, help_text.center(width), width - 1)
     stdscr.attroff(curses.A_DIM)
 
 
-def review_dir(stdscr, dir_path):
+def review_path(stdscr, path, branch_mode=False):
     curses.endwin()
-    subprocess.run(["git", "diff-image", dir_path])
+    if branch_mode:
+        subprocess.run(["git", "diff-image", "master...HEAD", "--", path])
+    else:
+        subprocess.run(["git", "diff-image", path])
     stdscr = curses.initscr()
     curses.noecho()
     curses.cbreak()
@@ -132,15 +156,15 @@ def review_dir(stdscr, dir_path):
     return stdscr
 
 
-def curses_main(stdscr, base_path):
+def curses_main(stdscr, base_path, branch_mode=False):
     curses.curs_set(0)
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)
     curses.init_pair(2, curses.COLOR_GREEN, -1)
     curses.init_pair(3, curses.COLOR_RED, -1)
 
-    dirs = get_changed_dirs(base_path)
-    items = [{"path": d, "count": count_files(d), "status": STATUS_PENDING} for d in dirs]
+    dirs = get_changed_dirs(base_path, branch_mode)
+    items = [{"path": d, "count": count_files(d, branch_mode), "status": STATUS_PENDING} for d in dirs]
 
     cursor = 0
     scroll_offset = 0
@@ -186,7 +210,13 @@ def curses_main(stdscr, base_path):
 
         elif key in (ord("\n"), ord("r")):
             if items:
-                stdscr = review_dir(stdscr, items[cursor]["path"])
+                stdscr = review_path(stdscr, items[cursor]["path"], branch_mode)
+
+        elif key == ord("S"):
+            if items:
+                files = get_files_in_dir(items[cursor]["path"], branch_mode)
+                if files:
+                    stdscr = review_path(stdscr, random.choice(files), branch_mode)
 
         elif key == ord("u"):
             if items and items[cursor]["status"] == STATUS_PENDING:
@@ -222,8 +252,13 @@ def curses_main(stdscr, base_path):
 
 
 def main():
-    base_path = sys.argv[1] if len(sys.argv) >= 2 else None
-    curses.wrapper(lambda stdscr: curses_main(stdscr, base_path))
+    parser = argparse.ArgumentParser(description="Review changed Paparazzi screenshots")
+    parser.add_argument("--branch", action="store_true",
+                        help="Compare HEAD vs master instead of working directory")
+    parser.add_argument("base_path", nargs="?", default=None,
+                        help="Optional path to scope the diff")
+    args = parser.parse_args()
+    curses.wrapper(lambda stdscr: curses_main(stdscr, args.base_path, args.branch))
 
 
 if __name__ == "__main__":

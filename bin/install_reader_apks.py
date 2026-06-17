@@ -13,6 +13,7 @@ Requirements:
   sc-grpcurl, ~/stripe/mint/zoolander checked out, adb
 """
 
+import argparse
 import json
 import os
 import subprocess
@@ -269,8 +270,13 @@ def select_cached_version(cached: list[tuple[str, str, str]]) -> tuple[str, str,
 
 
 def main():
-    verbose = "-v" in sys.argv or "--verbose" in sys.argv
-    cached_only = "--cached" in sys.argv
+    parser = argparse.ArgumentParser(
+        description="Install release APKs (updater + reader) onto a connected device via adb."
+    )
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show debug output for grpcurl and S3 commands")
+    args = parser.parse_args()
+    verbose = args.verbose
 
     print("\nChecking currently installed versions...")
     updater_ver = get_installed_version(UPDATER_PACKAGE)
@@ -278,61 +284,86 @@ def main():
     print(f"  Updater: {updater_ver or 'not installed'}")
     print(f"  Reader:  {reader_ver or 'not installed'}")
 
-    if cached_only:
-        cached = find_cached_versions()
-        if not cached:
-            print(f"\n  ERROR: No cached versions found in {APK_DIR}", file=sys.stderr)
-            sys.exit(1)
-        print(f"\nFound {len(cached)} cached version(s).")
-        version, updater_apk, reader_apk = select_cached_version(cached)
-    else:
-        print("\nFetching latest debug versions...")
+    # Check for locally cached versions first
+    cached = find_cached_versions()
+    if cached:
+        print(f"\nLocally cached versions:")
+        print(f"  0. Fetch from server")
+        for i, (ver, _, _) in enumerate(cached, 1):
+            print(f"  {i}. {ver}")
+        print()
+        while True:
+            choice = input(f"  Select version [0-{len(cached)}]: ").strip()
+            try:
+                idx = int(choice)
+                if idx == 0:
+                    break
+                if 1 <= idx <= len(cached):
+                    version, updater_apk, reader_apk = cached[idx - 1]
+                    print(f"\n  Ready to install:")
+                    print(f"    Updater: {updater_apk}")
+                    print(f"    Reader:  {reader_apk}")
+                    answer = input("\n  Proceed with install? [y/N] ").strip().lower()
+                    if answer != "y":
+                        print("  Aborted.")
+                        sys.exit(0)
+                    print("\n-> Installing updater APK...")
+                    adb_install(updater_apk, verbose=verbose)
+                    print("\n-> Installing reader APK...")
+                    adb_install(reader_apk, verbose=verbose)
+                    print("\nDone! Both APKs installed successfully.")
+                    return
+            except ValueError:
+                pass
+            print(f"  Invalid choice. Enter a number between 0 and {len(cached)}.")
 
-        print("\n  Fetching updater versions...")
-        updater_versions = list_asset_versions(UPDATER_ASSET_ID, verbose=verbose)
-        if not updater_versions:
-            print("  ERROR: No debug versions found for updater asset.", file=sys.stderr)
-            sys.exit(1)
-        print(f"  Found {len(updater_versions)} debug version(s).")
+    print("\nFetching latest debug versions...")
 
-        print("\n  Fetching reader versions...")
-        reader_versions = list_asset_versions(READER_ASSET_ID, verbose=verbose)
-        if not reader_versions:
-            print("  ERROR: No debug versions found for reader asset.", file=sys.stderr)
-            sys.exit(1)
-        print(f"  Found {len(reader_versions)} debug version(s).")
+    print("\n  Fetching updater versions...")
+    updater_versions = list_asset_versions(UPDATER_ASSET_ID, verbose=verbose)
+    if not updater_versions:
+        print("  ERROR: No debug versions found for updater asset.", file=sys.stderr)
+        sys.exit(1)
+    print(f"  Found {len(updater_versions)} debug version(s).")
 
-        matched, unmatched = merge_versions(updater_versions, reader_versions)
+    print("\n  Fetching reader versions...")
+    reader_versions = list_asset_versions(READER_ASSET_ID, verbose=verbose)
+    if not reader_versions:
+        print("  ERROR: No debug versions found for reader asset.", file=sys.stderr)
+        sys.exit(1)
+    print(f"  Found {len(reader_versions)} debug version(s).")
 
-        if unmatched:
-            print("\n  Versions without a matching pair (not installable):")
-            for prefix, which in unmatched:
-                print(f"    {prefix} — {which}")
+    matched, unmatched = merge_versions(updater_versions, reader_versions)
 
-        if not matched:
-            print("\n  ERROR: No versions found with both updater and reader.", file=sys.stderr)
-            sys.exit(1)
+    if unmatched:
+        print("\n  Versions without a matching pair (not installable):")
+        for prefix, which in unmatched:
+            print(f"    {prefix} — {which}")
 
-        updater_choice, reader_choice = select_version(matched)
+    if not matched:
+        print("\n  ERROR: No versions found with both updater and reader.", file=sys.stderr)
+        sys.exit(1)
 
-        print(f"\n  Selected updater: {updater_choice['version']} ({updater_choice['id']})")
-        print(f"  Selected reader:  {reader_choice['version']} ({reader_choice['id']})")
+    updater_choice, reader_choice = select_version(matched)
 
-        # Build S3 URLs from the version data
-        updater_s3 = get_s3_url(updater_choice)
-        reader_s3 = get_s3_url(reader_choice)
-        version = updater_choice["version"]
+    print(f"\n  Selected updater: {updater_choice['version']} ({updater_choice['id']})")
+    print(f"  Selected reader:  {reader_choice['version']} ({reader_choice['id']})")
 
-        if verbose:
-            print(f"  [debug] updater S3: {updater_s3}")
-            print(f"  [debug] reader S3:  {reader_s3}")
+    # Build S3 URLs from the version data
+    updater_s3 = get_s3_url(updater_choice)
+    reader_s3 = get_s3_url(reader_choice)
+    version = updater_choice["version"]
 
-        # Download/cache APKs
-        print("\n-> Preparing updater APK...")
-        updater_apk = ensure_apk(updater_s3, version, UPDATER_PACKAGE, verbose=verbose)
+    if verbose:
+        print(f"  [debug] updater S3: {updater_s3}")
+        print(f"  [debug] reader S3:  {reader_s3}")
 
-        print("\n-> Preparing reader APK...")
-        reader_apk = ensure_apk(reader_s3, version, READER_PACKAGE, verbose=verbose)
+    # Download/cache APKs
+    print("\n-> Preparing updater APK...")
+    updater_apk = ensure_apk(updater_s3, version, UPDATER_PACKAGE, verbose=verbose)
+
+    print("\n-> Preparing reader APK...")
+    reader_apk = ensure_apk(reader_s3, version, READER_PACKAGE, verbose=verbose)
 
     # Confirm install
     print(f"\n  Ready to install:")
