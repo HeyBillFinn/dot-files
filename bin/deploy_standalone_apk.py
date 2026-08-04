@@ -120,6 +120,19 @@ def get_latest_deploy_plan(ddg_id: str, verbose: bool = False) -> dict | None:
     return plans[0]
 
 
+def get_in_review_plan(ddg_id: str, verbose: bool = False) -> dict | None:
+    """Return the deploy plan currently IN_REVIEW for a deploy group, or None."""
+    response = run_grpcurl("ListDeployPlans", {
+        "deploy_group_id": ddg_id,
+        "states": ["IN_REVIEW"],
+    }, verbose=verbose)
+    plans = response.get("deployPlans", [])
+    if not plans:
+        return None
+    return plans[0]
+
+
+
 def format_plan_status(plan: dict) -> str:
     """Format a deploy plan's state and rollout stage as a human-readable string."""
     state = plan.get("state", "UNKNOWN")
@@ -283,20 +296,28 @@ def main():
     # Look up latest deploy plan status for each group.
     print("\n  Checking latest deploy plan status...")
     has_warnings = False
+    has_in_review = False
     group_plan_status = []
     for g in groups:
         try:
             plan = get_latest_deploy_plan(g.id, verbose=verbose)
         except Exception as e:
-            group_plan_status.append((g, None, f"error: {e}"))
+            group_plan_status.append((g, None, None, f"error: {e}"))
             continue
-        group_plan_status.append((g, plan, None))
+        try:
+            in_review_plan = get_in_review_plan(g.id, verbose=verbose)
+        except Exception as e:
+            group_plan_status.append((g, plan, None, f"error checking in-review: {e}"))
+            continue
+        group_plan_status.append((g, plan, in_review_plan, None))
         if plan and not is_plan_fully_rolled_out(plan):
             has_warnings = True
+        if in_review_plan:
+            has_in_review = True
 
     print()
     print(f"  Deploy groups ({len(groups)}):")
-    for g, plan, err in group_plan_status:
+    for g, plan, in_review_plan, err in group_plan_status:
         ddg_url = AMP_DDG_URL.format(g.id)
         print(f"    {g.name:<20}  {g.id}   rollout={g.rollout_plan}")
         print(f"    {'':20}  {ddg_url}")
@@ -313,6 +334,10 @@ def main():
                 print(f"    {'':20}  Latest plan: {status_str}")
                 print(f"    {'':20}  ⚠️  WARNING: Previous plan not at 100%!")
                 print(f"    {'':20}  {plan_url}")
+        if in_review_plan:
+            review_url = AMP_DEPLOY_PLAN_URL.format(in_review_plan["id"])
+            print(f"    {'':20}  🚫 BLOCKER: Plan already in review: {in_review_plan['id']}")
+            print(f"    {'':20}  {review_url}")
     print()
     if ga:
         print("  For each group, this script will:")
@@ -328,6 +353,12 @@ def main():
         print("    3. ActivateProgressiveDeployPlan")
         print("    4. AdvanceProgressiveDeployPlan -> 100%")
     print()
+
+    if has_in_review:
+        print("  🚫 One or more groups already have a deploy plan in review.")
+        print("  You must cancel or approve those plans before creating new ones.")
+        print()
+        sys.exit(1)
 
     if has_warnings:
         print("  ⚠️  One or more groups have a deploy plan that hasn't reached 100%.")

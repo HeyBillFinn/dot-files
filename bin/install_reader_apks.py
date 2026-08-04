@@ -25,10 +25,22 @@ FENDER_PROTO = "src/proto/com/stripe/terminal/terminal/pub/api/fender/internal_t
 FENDER_HOST = "fender.corp.stripe.com"
 FENDER_SERVICE = "com.stripe.terminal.terminal.pub.api.fender.InternalToolsApi"
 
-UPDATER_ASSET_ID = "tmda_5300GW1B701e5PnkiTP000000000000"
-READER_ASSET_ID = "tmda_5300GW1B701c5Pn68Rg000000000000"
-
-DEVICE_TYPE = "BBPOS"
+DEVICE_CONFIGS = {
+    "bbpos": {
+        "updater_asset_id": "tmda_5300GW1B701e5PnkiTP000000000000",
+        "reader_asset_id": "tmda_5300GW1B701c5Pn68Rg000000000000",
+        "updater_package": "com.stripe.updater",
+        "reader_package": "com.stripe.reader",
+        "apk_suffix": "bbpos-debug.apk",
+    },
+    "verifone": {
+        "updater_asset_id": "tmda_5300UDuSM0017eIpR87000000000000",
+        "reader_asset_id": "tmda_5300UDuSM0007eIpzeX000000000000",
+        "updater_package": "com.priv.stripe.updater.verifone",
+        "reader_package": "com.stripe.reader.verifone",
+        "apk_suffix": "verifone-debug.apk",
+    },
+}
 
 
 def run_grpcurl(method: str, data: dict, verbose: bool = False) -> dict:
@@ -86,15 +98,14 @@ def get_s3_url(version: dict) -> str:
 APK_DIR = os.path.expanduser("~/stripe/apks/release")
 
 
-def apk_local_path(version: str, package: str) -> str:
+def apk_local_path(version: str, package: str, apk_suffix: str = "bbpos-debug.apk") -> str:
     """Return the local path for a cached APK following existing naming convention."""
-    # e.g. ~/stripe/apks/release/2.42.1.0/com.stripe.updater-bbpos-debug.apk
-    return os.path.join(APK_DIR, version, f"{package}-bbpos-debug.apk")
+    return os.path.join(APK_DIR, version, f"{package}-{apk_suffix}")
 
 
-def ensure_apk(s3_url: str, version: str, package: str, verbose: bool = False) -> str:
+def ensure_apk(s3_url: str, version: str, package: str, apk_suffix: str = "bbpos-debug.apk", verbose: bool = False) -> str:
     """Download and extract APK if not already cached. Returns path to the APK."""
-    local_path = apk_local_path(version, package)
+    local_path = apk_local_path(version, package, apk_suffix)
 
     if os.path.exists(local_path):
         print(f"  Already cached: {local_path}")
@@ -218,8 +229,19 @@ def select_version(matched: list[tuple[str, dict, dict, int, int]]) -> tuple[dic
         print(f"  Invalid choice. Enter a number between 1 and {len(matched)}.")
 
 
-UPDATER_PACKAGE = "com.stripe.updater"
-READER_PACKAGE = "com.stripe.reader"
+
+
+def check_adb_connection() -> bool:
+    """Verify adb can reach a device. Returns True if connected, exits if not."""
+    result = subprocess.run(
+        ["adb", "get-state"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        msg = result.stderr.strip() or result.stdout.strip()
+        print(f"\n  ERROR: adb not connected: {msg}", file=sys.stderr)
+        sys.exit(1)
+    return True
 
 
 def get_installed_version(package: str) -> str | None:
@@ -236,15 +258,15 @@ def get_installed_version(package: str) -> str | None:
     return None
 
 
-def find_cached_versions() -> list[tuple[str, str, str]]:
+def find_cached_versions(config: dict) -> list[tuple[str, str, str]]:
     """Scan APK_DIR for cached versions that have both updater and reader APKs.
     Returns list of (version, updater_path, reader_path) sorted newest first."""
     results = []
     if not os.path.isdir(APK_DIR):
         return results
     for version_dir in sorted(os.listdir(APK_DIR), reverse=True):
-        updater_path = apk_local_path(version_dir, UPDATER_PACKAGE)
-        reader_path = apk_local_path(version_dir, READER_PACKAGE)
+        updater_path = apk_local_path(version_dir, config["updater_package"], config["apk_suffix"])
+        reader_path = apk_local_path(version_dir, config["reader_package"], config["apk_suffix"])
         if os.path.exists(updater_path) and os.path.exists(reader_path):
             results.append((version_dir, updater_path, reader_path))
     return results
@@ -278,14 +300,21 @@ def main():
     args = parser.parse_args()
     verbose = args.verbose
 
+    device_choice = input("\nDevice type — [B]bpos or [v]erifone? [B] ").strip().lower()
+    device_type = "verifone" if device_choice in ("v", "verifone") else "bbpos"
+    config = DEVICE_CONFIGS[device_type]
+    print(f"  Using: {device_type}")
+
+    check_adb_connection()
+
     print("\nChecking currently installed versions...")
-    updater_ver = get_installed_version(UPDATER_PACKAGE)
-    reader_ver = get_installed_version(READER_PACKAGE)
+    updater_ver = get_installed_version(config["updater_package"])
+    reader_ver = get_installed_version(config["reader_package"])
     print(f"  Updater: {updater_ver or 'not installed'}")
     print(f"  Reader:  {reader_ver or 'not installed'}")
 
     # Check for locally cached versions first
-    cached = find_cached_versions()
+    cached = find_cached_versions(config)
     if cached:
         print(f"\nLocally cached versions:")
         print(f"  0. Fetch from server")
@@ -320,14 +349,14 @@ def main():
     print("\nFetching latest debug versions...")
 
     print("\n  Fetching updater versions...")
-    updater_versions = list_asset_versions(UPDATER_ASSET_ID, verbose=verbose)
+    updater_versions = list_asset_versions(config["updater_asset_id"], verbose=verbose)
     if not updater_versions:
         print("  ERROR: No debug versions found for updater asset.", file=sys.stderr)
         sys.exit(1)
     print(f"  Found {len(updater_versions)} debug version(s).")
 
     print("\n  Fetching reader versions...")
-    reader_versions = list_asset_versions(READER_ASSET_ID, verbose=verbose)
+    reader_versions = list_asset_versions(config["reader_asset_id"], verbose=verbose)
     if not reader_versions:
         print("  ERROR: No debug versions found for reader asset.", file=sys.stderr)
         sys.exit(1)
@@ -360,10 +389,10 @@ def main():
 
     # Download/cache APKs
     print("\n-> Preparing updater APK...")
-    updater_apk = ensure_apk(updater_s3, version, UPDATER_PACKAGE, verbose=verbose)
+    updater_apk = ensure_apk(updater_s3, version, config["updater_package"], config["apk_suffix"], verbose=verbose)
 
     print("\n-> Preparing reader APK...")
-    reader_apk = ensure_apk(reader_s3, version, READER_PACKAGE, verbose=verbose)
+    reader_apk = ensure_apk(reader_s3, version, config["reader_package"], config["apk_suffix"], verbose=verbose)
 
     # Confirm install
     print(f"\n  Ready to install:")

@@ -82,6 +82,8 @@ jackson
 jackson-stripe
 jaffaki
 jaffaki-stripe
+jamier
+jamier-stripe
 janetzhang
 janetzhang-stripe
 jayaramk

@@ -156,6 +156,21 @@ explode_aar() {
 
 alias pbapply='pbpaste | git apply -p0 --reject'
 alias pbapplyghdiff='pbpaste | awk 1 | git apply --reject'
+
+pbcopycommit() {
+  if [ "$#" -gt 1 ]; then
+    echo "Usage: pbcopycommit [commit]"
+    return 1
+  fi
+
+  local commit="${1:-HEAD}"
+  git show --format=email --binary "$commit" | pbcopy
+}
+
+pbam() {
+  pbpaste | git am --3way "$@"
+}
+
 alias kmpcisend='./scripts/kmp/ci_send.sh'
 alias scrcpyreader='scrcpy -s $(reader_device)'
 alias scrcpys10='scrcpy -s $S10_ADB_DEVICE_ID'
@@ -612,7 +627,7 @@ type_foo() {
 EOF
 }
 
-alias adblogcatclear='adbreader logcat -c'
+alias adblogcatclear='adb logcat -c'
 adblogcattransaction() {
   READER_PID=$(_adbreaderpid)
   UPDATER_PID=$(_adbupdaterpid)
@@ -711,6 +726,51 @@ teedatetxtfile() {
   fi
 }
 
+adblogcatall() {
+  type adblogcatall
+
+  READER_PID=$(_adbreaderpid)
+  UPDATER_PID=$(_adbupdaterpid)
+  STANDALONE_PID=$(_adbstandalonepid)
+  TEST_APP_PID=$(_adbtestapppid)
+  DONATIONS_PID=$(_adbdonationstestapppid)
+
+  echo "reader:      ${READER_PID:-not running} (com.stripe.reader)"
+  echo "updater:     ${UPDATER_PID:-not running} (com.stripe.updater)"
+  echo "standalone:  ${STANDALONE_PID:-not running} (com.stripe.standalone.app)"
+  echo "testapp:     ${TEST_APP_PID:-not running} (com.stripe.terminal.testapp)"
+  echo "donations:   ${DONATIONS_PID:-not running} (com.stripe.donationstestapp)"
+  echo "---"
+
+  SED_SCRIPT=""
+  [[ -n $READER_PID ]]     && SED_SCRIPT="$SED_SCRIPT;s/ $READER_PID / <reader> /g"
+  [[ -n $UPDATER_PID ]]    && SED_SCRIPT="$SED_SCRIPT;s/ $UPDATER_PID / <updater> /g"
+  [[ -n $STANDALONE_PID ]] && SED_SCRIPT="$SED_SCRIPT;s/ $STANDALONE_PID / <standalone> /g"
+  [[ -n $TEST_APP_PID ]]   && SED_SCRIPT="$SED_SCRIPT;s/ $TEST_APP_PID / <testapp> /g"
+  [[ -n $DONATIONS_PID ]]  && SED_SCRIPT="$SED_SCRIPT;s/ $DONATIONS_PID / <donations> /g"
+  SED_SCRIPT=${SED_SCRIPT#;}
+
+  TIMESTAMP=$(date -u +"%Y_%m_%dT%H_%M_%SZ")
+  if [[ -n $SED_SCRIPT ]]; then
+    adb shell logcat \
+      | grep --line-buffered -vE " (chatty|ActivityManager|SystemServiceManager|SystemServer|SystemServerTiming|IzatSvc_IzatManager|LocSvc_HIDL_IzatProvider|TelecomFramework|Telecom|vold|ThermalHAL-UTIL|ThermalHAL-TARGET|wpa_supplicant|WifiService) " \
+      | grep --line-buffered -v ' V QueueFileCollector: ' \
+      | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' \
+      | grep --line-buffered -v ' V BatchDispatcher: ' \
+      | grep --line-buffered -v ' I DebugConfigCerthorse: ' \
+      | gsed --unbuffered -E "$SED_SCRIPT" \
+      | tee "logcat_${TIMESTAMP}.txt"
+  else
+    adb shell logcat \
+      | grep --line-buffered -vE " (chatty|ActivityManager|SystemServiceManager|SystemServer|SystemServerTiming|IzatSvc_IzatManager|LocSvc_HIDL_IzatProvider|TelecomFramework|Telecom|vold|ThermalHAL-UTIL|ThermalHAL-TARGET|wpa_supplicant|WifiService) " \
+      | grep --line-buffered -v ' V QueueFileCollector: ' \
+      | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' \
+      | grep --line-buffered -v ' V BatchDispatcher: ' \
+      | grep --line-buffered -v ' I DebugConfigCerthorse: ' \
+      | tee "logcat_${TIMESTAMP}.txt"
+  fi
+}
+
 adblogcatverbose() {
   READER_PID=$(_adbreaderpid)
   UPDATER_PID=$(_adbupdaterpid)
@@ -771,7 +831,17 @@ lesslatestlogcat() {
     fi
 }
 
-
+gdg() {
+  local png_files
+  baseBranch="origin/green-pay-server"
+  png_files=$(git diff --name-only "$baseBranch"...HEAD "$@" | rg '\.png$')
+  if [[ -n "$png_files" ]]; then
+    echo "Ignoring PNG files:"
+    echo "$png_files" | sed 's/^/  /'
+    echo ""
+  fi
+  git diff "$baseBranch"...HEAD "$@" -- . ':(exclude)*.png'
+}
 
 gdm() {
   baseBranch=$(default_branch)
@@ -1827,6 +1897,7 @@ appstart() {
 }
 export S10_ADB_DEVICE_ID="RF8N41V8P0T"
 export PIXEL_10_ADB_DEVICE_ID="57260DLCR000FJ"
+export WILLIAM_FINN_IPHONE_UDID="AFDB9FCD-F047-52C4-A90E-7C24C40A8D4B"
 
 gradletest() {
   # Get the title of the first Android Studio window
@@ -1911,6 +1982,10 @@ alias readerreinstallverifoneupdaterandreader='readerreinstallverifoneupdater &&
 alias standaloneassemble='type standaloneassemble; ./gradlew --configuration-cache :standalonepos:application:assembleDebug ; saydone'
 alias standaloneinstallDebug='type standaloneinstallDebug; ./gradlew --configuration-cache :standalonepos:application:installDebug ; saydone'
 alias standalonereinstall='type standalonereinstall; adbreader install -d ./standalonepos/application/build/outputs/apk/debug/application-debug.apk; saydone'
+
+alias terminalandroidassemble='type terminalandroidassemble; ./gradlew --configuration-cache :standalonepos:android:assembleDebug ; saydone'
+alias terminalandroidreinstall='type terminalandroidreinstall; adb install -d ./standalonepos/android/build/outputs/apk/debug/android-debug.apk && terminalandroidappstart; saydone'
+alias terminalandroidappstart='type terminalandroidappstart; adb shell am start -n com.stripe.standalonepos.android.debug/com.stripe.standalone.android.MainActivity'
 
 alias readerbuildapp='type readerbuildapp; ./gradlew --configuration-cache :terminalapp:application:installHandoff; adbreader shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone installing app'
 alias readerstartupdater='type readerstartupdater; adbreader shell am start -n com.stripe.updater/.MainActivity'

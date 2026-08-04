@@ -5,11 +5,12 @@ Interactive curses-based tool for reviewing changed Paparazzi screenshot directo
 Shows a list of directories with changed screenshots. Navigate and act:
   [j/k/arrows] navigate
   [Enter/r]    review — open git diff-image for the directory
+  [l/Enter]    drill down into directory (grouped by test name)
   [S]          sample — open diff-image for one random file in the directory
   [u]          undo — git checkout -- <dir>
   [s]          stage — git add <dir>
   [g/G]        jump to top/bottom
-  [q]          quit
+  [q]          quit (or go back from drill-down)
 
 Usage:
   review-screenshots.py [--branch] [snapshot-images-dir]
@@ -20,6 +21,7 @@ Options:
 
 import argparse
 import curses
+import os
 import random
 import subprocess
 import sys
@@ -136,7 +138,7 @@ def draw_list(stdscr, items, cursor, scroll_offset):
             stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
 
     help_row = height - 2
-    help_text = " [j/k] navigate  [Enter/r] review  [S] sample  [u] undo  [s] stage  [U] undo all pending  [g/G] top/bottom  [q] quit"
+    help_text = " [j/k] navigate  [Enter/l] drill down  [r] review  [S] sample  [u] undo  [s] stage  [U] undo all  [g/G] top/bottom  [q] quit"
     stdscr.attron(curses.A_DIM)
     stdscr.addnstr(help_row, 0, help_text.center(width), width - 1)
     stdscr.attroff(curses.A_DIM)
@@ -153,6 +155,131 @@ def review_path(stdscr, path, branch_mode=False):
     curses.cbreak()
     stdscr.keypad(True)
     curses.curs_set(0)
+    return stdscr
+
+
+def draw_drilldown(stdscr, dir_path, items, cursor, scroll_offset):
+    height, width = stdscr.getmaxyx()
+    header_lines = 3
+    footer_lines = 3
+    list_height = height - header_lines - footer_lines
+
+    staged = sum(1 for it in items if it["status"] == STATUS_STAGED)
+    reverted = sum(1 for it in items if it["status"] == STATUS_REVERTED)
+    pending = sum(1 for it in items if it["status"] == STATUS_PENDING)
+
+    title = f" {dir_path} — {len(items)} file(s): {pending} pending, {staged} staged, {reverted} reverted "
+    stdscr.attron(curses.A_BOLD)
+    stdscr.addnstr(0, 0, title[:width - 1].center(width), width - 1)
+    stdscr.attroff(curses.A_BOLD)
+
+    col_headers = f"{'#':>5}  {'STATUS':<10} FILE"
+    stdscr.attron(curses.A_DIM)
+    stdscr.addnstr(1, 0, col_headers.ljust(width - 1), width - 1)
+    stdscr.attroff(curses.A_DIM)
+
+    for i in range(list_height):
+        idx = scroll_offset + i
+        row = header_lines + i
+        if idx >= len(items):
+            stdscr.move(row, 0)
+            stdscr.clrtoeol()
+            continue
+
+        it = items[idx]
+        filename = os.path.basename(it["path"])
+        line = f" {idx + 1:>4}. {it['status']:<10} {filename}"
+
+        if idx == cursor:
+            stdscr.attron(curses.color_pair(1))
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+            stdscr.attroff(curses.color_pair(1))
+        elif it["status"] == STATUS_STAGED:
+            stdscr.attron(curses.color_pair(2))
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+            stdscr.attroff(curses.color_pair(2))
+        elif it["status"] == STATUS_REVERTED:
+            stdscr.attron(curses.color_pair(3))
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+            stdscr.attroff(curses.color_pair(3))
+        else:
+            stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
+
+    help_row = height - 2
+    help_text = " [j/k] navigate  [Enter/r] review  [u] undo  [s] stage  [g/G] top/bottom  [q/h] back"
+    stdscr.attron(curses.A_DIM)
+    stdscr.addnstr(help_row, 0, help_text.center(width), width - 1)
+    stdscr.attroff(curses.A_DIM)
+
+
+def drilldown_loop(stdscr, dir_path, branch_mode=False):
+    """Drill-down view listing individual files within a directory."""
+    files = get_files_in_dir(dir_path, branch_mode)
+    items = [{"path": f, "status": STATUS_PENDING} for f in sorted(files)]
+
+    cursor = 0
+    scroll_offset = 0
+
+    while True:
+        height, width = stdscr.getmaxyx()
+        header_lines = 3
+        footer_lines = 3
+        list_height = height - header_lines - footer_lines
+
+        if items:
+            cursor = max(0, min(cursor, len(items) - 1))
+            if cursor < scroll_offset:
+                scroll_offset = cursor
+            elif cursor >= scroll_offset + list_height:
+                scroll_offset = cursor - list_height + 1
+
+        stdscr.clear()
+        draw_drilldown(stdscr, dir_path, items, cursor, scroll_offset)
+        stdscr.refresh()
+
+        key = stdscr.getch()
+
+        if key == curses.KEY_UP or key == ord("k"):
+            if cursor > 0:
+                cursor -= 1
+
+        elif key == curses.KEY_DOWN or key == ord("j"):
+            if cursor < len(items) - 1:
+                cursor += 1
+
+        elif key in (curses.KEY_PPAGE, 21):
+            cursor = max(0, cursor - list_height)
+
+        elif key in (curses.KEY_NPAGE, 4):
+            cursor = min(len(items) - 1, cursor + list_height)
+
+        elif key == ord("g"):
+            cursor = 0
+
+        elif key == ord("G"):
+            cursor = max(0, len(items) - 1)
+
+        elif key in (ord("\n"), ord("r")):
+            if items:
+                stdscr = review_path(stdscr, items[cursor]["path"], branch_mode)
+
+        elif key == ord("u"):
+            if items and items[cursor]["status"] == STATUS_PENDING:
+                subprocess.run(["git", "checkout", "--", items[cursor]["path"]], capture_output=True)
+                items[cursor]["status"] = STATUS_REVERTED
+                if cursor < len(items) - 1:
+                    cursor += 1
+
+        elif key == ord("s"):
+            if items and items[cursor]["status"] == STATUS_PENDING:
+                subprocess.run(["git", "add", items[cursor]["path"]], capture_output=True)
+                items[cursor]["status"] = STATUS_STAGED
+                if cursor < len(items) - 1:
+                    cursor += 1
+
+        elif key in (ord("q"), ord("h"), curses.KEY_LEFT):
+            break
+
     return stdscr
 
 
@@ -208,7 +335,11 @@ def curses_main(stdscr, base_path, branch_mode=False):
         elif key == ord("G"):
             cursor = max(0, len(items) - 1)
 
-        elif key in (ord("\n"), ord("r")):
+        elif key in (ord("\n"), ord("l"), curses.KEY_RIGHT):
+            if items:
+                stdscr = drilldown_loop(stdscr, items[cursor]["path"], branch_mode)
+
+        elif key == ord("r"):
             if items:
                 stdscr = review_path(stdscr, items[cursor]["path"], branch_mode)
 
