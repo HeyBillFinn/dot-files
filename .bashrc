@@ -1,4 +1,4 @@
-# Don't merge
+#curllocationslist Don't merge
 set -o vi
 export EDITOR=nvim
 alias vim=nvim
@@ -172,15 +172,13 @@ pbam() {
 }
 
 alias kmpcisend='./scripts/kmp/ci_send.sh'
-alias scrcpyreader='scrcpy -s $(reader_device)'
 alias scrcpys10='scrcpy -s $S10_ADB_DEVICE_ID'
-alias scrcpypixel10='scrcpy -s $PIXEL_10_ADB_DEVICE_ID'
 
-alias readerforceuninstall='export ANDROID_SERIAL=$(reader_device); python3 ./scripts/device-owner/force-uninstall.py'
-alias readerbypassappinstallenabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control.sh bypassAppInstall true && echo success'
-alias readerbypassappinstalldisabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control.sh bypassAppInstall false && echo success'
-alias readersetupdatesdisabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control-check.sh setUpdatesEnabled false && echo SUCCESS'
-alias readersetupdatesenabled='export ANDROID_SERIAL=$(reader_device); ./scripts/device-owner/reader-control-check.sh setUpdatesEnabled true && echo SUCCESS'
+alias readerforceuninstall='python3 ./scripts/device-owner/force-uninstall.py'
+alias readerbypassappinstallenabled='./scripts/device-owner/reader-control.sh bypassAppInstall true && echo success'
+alias readerbypassappinstalldisabled='./scripts/device-owner/reader-control.sh bypassAppInstall false && echo success'
+alias readersetupdatesdisabled='./scripts/device-owner/reader-control-check.sh setUpdatesEnabled false && echo SUCCESS'
+alias readersetupdatesenabled='./scripts/device-owner/reader-control-check.sh setUpdatesEnabled true && echo SUCCESS'
 alias readergenerateregistrationcode='./scripts/device-owner/reader-control.sh generateRegistrationCode && adb logcat -s DebugUpdaterControlReceiver -v raw'
 alias clauded='claude --dangerously-skip-permissions'
 alias cl='claude --dangerously-skip-permissions'
@@ -356,8 +354,6 @@ alias gb='fzf-git-branch'
 alias gco='fzf-git-checkout'
 alias ktfmt='java -jar ~/bin/ktfmt-0.54-jar-with-dependencies.jar --kotlinlang-style'
 
-alias adbreader='adb -s $(reader_device)'
-
 s()
 {
   GIT_BASE_DIR=$(basename `git rev-parse --show-toplevel`)
@@ -390,137 +386,73 @@ default_branch() {
   git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'
 }
 
-setreaders710() {
-  export PREFERRED_READER="f4c941aa"
-  _current_reader=$(reader_device)
-  export ANDROID_SERIAL=$_current_reader
+_set_android_serial() {
+  export ANDROID_SERIAL="$1"
+  echo "ANDROID_SERIAL=${ANDROID_SERIAL} (${2})"
 }
 
-setreaders700() {
-  export PREFERRED_READER="4f64d47b"
-  _current_reader=$(reader_device)
-  export ANDROID_SERIAL=$_current_reader
+setandroidserials710() {
+  _set_android_serial "f4c941aa" "S710"
 }
 
-setreaders700devkit() {
-  export PREFERRED_READER="1234567"
-  _current_reader=$(reader_device)
-  export ANDROID_SERIAL=$_current_reader
+setandroidserials700() {
+  _set_android_serial "4f64d47b" "S700"
 }
 
-setreaderwpe() {
-  export PREFERRED_READER="f85e6a55"
-  _current_reader=$(reader_device)
-  export ANDROID_SERIAL=$_current_reader
+setandroidserials700devkit() {
+  _set_android_serial "1234567" "S700 devkit"
 }
 
-setreaderv660pA13() {
-  export PREFERRED_READER="713-363-464"
-  _current_reader=$(reader_device)
-  export ANDROID_SERIAL=$_current_reader
+setandroidserialwpe() {
+  _set_android_serial "f85e6a55" "WPE"
 }
 
-setreaderv660pA10() {
-  export PREFERRED_READER="452-406-077"
-  _current_reader=$(reader_device)
-  export ANDROID_SERIAL=$_current_reader
+setandroidserialv660pA13() {
+  _set_android_serial "713-363-464" "V660P A13"
 }
 
-whichreader() {
-  current_reader_device=$(reader_device)
-  s710_string="f4c941aa"
-  s700_string="4f64d47b"
-  wpe_string="f85e6a55"
-  if [ "$current_reader_device" = "$s700_string" ]; then
-    echo "S700: $s700_string"
-  elif [ "$current_reader_device" = "$wpe_string" ]; then
-    echo "WPE: $wpe_string"
-  elif [ "$current_reader_device" = "$s710_string" ]; then
-    echo "S710: $s710_string"
-  else
-    echo "$current_reader_device"
-  fi
+setandroidserialv660pA10() {
+  _set_android_serial "452-406-077" "V660P A10"
 }
 
-reader_device() {
-  if [ -n "${PREFERRED_READER}" ]; then
-      echo "${PREFERRED_READER}"
-      return 0
-  fi
-  s710_string="f4c941aa"
-  s700_string="4f64d47b"
-  wpe_string="f85e6a55"
-  verifone_string="452-406-077"
-  adb_devices=$(adb devices | grep -v 'List of devices attached')
-  if [[ $adb_devices == *"$s700_string"* ]]; then
-    s700=true
-  else
-    s700=false
-  fi
-  if [[ $adb_devices == *"$wpe_string"* ]]; then
-    wpe=true
-  else
-    wpe=false
-  fi
-  if [[ $adb_devices == *"$verifone_string"* ]]; then
-    verifone=true
-  else
-    verifone=false
-  fi
-  if [[ $adb_devices == *"$s710_string"* ]]; then
-    s710=true
-  else
-    s710=false
-  fi
-
-  readers_found=0
-  [ "$s700" = "true" ] && ((readers_found++))
-  [ "$wpe" = "true" ] && ((readers_found++))
-  [ "$verifone" = "true" ] && ((readers_found++))
-  [ "$s710" = "true" ] && ((readers_found++))
-
-  if [ $readers_found -gt 1 ]; then
-    echo "multiple_readers_found"
-  elif [ $readers_found -eq 0 ]; then
-    echo "no_readers_found"
-  elif [ "$s700" = "true" ]; then
-    echo $s700_string
-  elif [ "$wpe" = "true" ]; then
-    echo $wpe_string
-  elif [ "$s710" = "true" ]; then
-    echo $s710_string
-  else
-    echo $verifone_string
-  fi
+setandroidserialpixel10() {
+  _set_android_serial "57260DLCR000FJ" "Pixel 10"
 }
-# reader_device() {
-#   if [ -n "${PREFERRED_READER}" ]; then
-#       echo "${PREFERRED_READER}"
-#       return 0
-#   fi
-#   s700_string="4f64d47b"
-#   wpe_string="f85e6a55"
-#   adb_devices=$(adb devices | grep -v 'List of devices attached')
-#   if [[ $adb_devices == *"$s700_string"* ]]; then
-#     s700=true
-#   else
-#     s700=false
-#   fi
-#   if [[ $adb_devices == *"$wpe_string"* ]]; then
-#     wpe=true
-#   else
-#     wpe=false
-#   fi
-#   if [ "$s700" = "true" ] && [ "$wpe" = "true" ]; then
-#     echo "two_readers_found"
-#   elif [ "$s700" = "false" ] && [ "$wpe" = "false" ]; then
-#     echo "no_readers_found"
-#   elif [ "$s700" = "true" ]; then
-#     echo $s700_string;
-#   else
-#     echo $wpe_string;
-#   fi
-# }
+
+whichandroidserial() {
+  case "$ANDROID_SERIAL" in
+    "")
+      echo "ANDROID_SERIAL is not set"
+      ;;
+    "f4c941aa")
+      echo "S710: $ANDROID_SERIAL"
+      ;;
+    "4f64d47b")
+      echo "S700: $ANDROID_SERIAL"
+      ;;
+    "1234567")
+      echo "S700 devkit: $ANDROID_SERIAL"
+      ;;
+    "f85e6a55")
+      echo "WPE: $ANDROID_SERIAL"
+      ;;
+    "713-363-464")
+      echo "V660P A13: $ANDROID_SERIAL"
+      ;;
+    "452-406-077")
+      echo "V660P A10: $ANDROID_SERIAL"
+      ;;
+    "57260DLCR000FJ")
+      echo "Pixel 10: $ANDROID_SERIAL"
+      ;;
+    "$S10_ADB_DEVICE_ID")
+      echo "S10: $ANDROID_SERIAL"
+      ;;
+    *)
+      echo "$ANDROID_SERIAL"
+      ;;
+  esac
+}
 
 _adbreaderpid() {
   adb shell ps | grep com.stripe.reader | tr -s "[:space:]" ' ' | cut -d' ' -f2
@@ -632,8 +564,8 @@ adblogcattransaction() {
   READER_PID=$(_adbreaderpid)
   UPDATER_PID=$(_adbupdaterpid)
   type adblogcattransaction
-  # adbreader shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID ' | grep --line-buffered -E 'BbposControllerListener|CancelHandler|HardwareService|BbposDeviceControllerImpl|PaymentCollectionCoordinator|PaymentCollectionStateMachine|BbposPaymentCollectionListener|FormNavigationFragment|BbposPaymentCollector|EndPreviousTransactionPrerequisiteFactory|PollingCommandLogger' | grep --line-buffered -E -v 'PaymentCollectionData\('" | sed -u "s/ $READER_PID / com.stripe.reader /; s/ $UPDATER_PID / com.stripe.updater /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
-  adbreader shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID ' | grep --line-buffered -E 'class=|asdf' | grep --line-buffered -E 'CollectReusableCardOp|CollectPaymentMethodOp|ResumeCollectPaymentMethodOp|SetReaderDisplayOp|TransactionCoordinator|TransactionViewModel.*onTransactionStateSummaryUpdate|DefaultScreenDurationLogger|BbposControllerListener|HardwareService.*BbposSdkService|BbposDeviceControllerImpl|PaymentCollectionCoordinator|PaymentCollectionStateMachine|BbposPaymentCollectionListener|FormNavigationFragment|BbposPaymentCollector|EndPreviousTransactionPrerequisiteFactory|PollingCommandLogger|SetReaderDisplayComponentHealthLogger|asdf'" | sed -u "s/ $READER_PID / com.stripe.reader /; s/ $UPDATER_PID / com.stripe.updater /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+  # adb shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID ' | grep --line-buffered -E 'BbposControllerListener|CancelHandler|HardwareService|BbposDeviceControllerImpl|PaymentCollectionCoordinator|PaymentCollectionStateMachine|BbposPaymentCollectionListener|FormNavigationFragment|BbposPaymentCollector|EndPreviousTransactionPrerequisiteFactory|PollingCommandLogger' | grep --line-buffered -E -v 'PaymentCollectionData\('" | sed -u "s/ $READER_PID / com.stripe.reader /; s/ $UPDATER_PID / com.stripe.updater /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+  adb shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID ' | grep --line-buffered -E 'class=|asdf' | grep --line-buffered -E 'CollectReusableCardOp|CollectPaymentMethodOp|ResumeCollectPaymentMethodOp|SetReaderDisplayOp|TransactionCoordinator|TransactionViewModel.*onTransactionStateSummaryUpdate|DefaultScreenDurationLogger|BbposControllerListener|HardwareService.*BbposSdkService|BbposDeviceControllerImpl|PaymentCollectionCoordinator|PaymentCollectionStateMachine|BbposPaymentCollectionListener|FormNavigationFragment|BbposPaymentCollector|EndPreviousTransactionPrerequisiteFactory|PollingCommandLogger|SetReaderDisplayComponentHealthLogger|asdf'" | sed -u "s/ $READER_PID / com.stripe.reader /; s/ $UPDATER_PID / com.stripe.updater /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
 }
 
 append_pid() {
@@ -781,9 +713,9 @@ adblogcatverbose() {
     GREP_PATTERN+="|$STANDALONE_PID"
   fi
   type adblogcatverbose
-  adbreader shell "logcat | grep --line-buffered -E '$GREP_PATTERN' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / reader     /; s/ $UPDATER_PID / updater    /; $( [[ -n $STANDALONE_PID ]] && echo "s/ $STANDALONE_PID / standalone /" )" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+  adb shell "logcat | grep --line-buffered -E '$GREP_PATTERN' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / reader     /; s/ $UPDATER_PID / updater    /; $( [[ -n $STANDALONE_PID ]] && echo "s/ $STANDALONE_PID / standalone /" )" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
 
-  #adbreader shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID|$STANDALONE_PID ' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / reader     /; s/ $UPDATER_PID / updater    /; s/ $STANDALONE_PID / standalone /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
+  #adb shell "logcat | grep --line-buffered -E ' $READER_PID|$UPDATER_PID|$STANDALONE_PID ' | grep --line-buffered -v ' V QueueFileCollector: ' | grep --line-buffered -v ' D DebugLoggingHttpInterceptor: ' | grep --line-buffered -v ' V BatchDispatcher: ' | grep --line-buffered -v ' I DebugConfigCerthorse: '" | sed -u "s/ $READER_PID / reader     /; s/ $UPDATER_PID / updater    /; s/ $STANDALONE_PID / standalone /" | tee "logcat_$(date -u +"%Y-%m-%dT%H:%M:%SZ").txt"
 }
 
 taillatestlogcat() {
@@ -1358,16 +1290,16 @@ curlaccountget() {
 }
 alias stripelistenwebhooks='stripe listen --forward-to localhost:8000/webhook'
 curllocationslist() {
-  type curllocationslist
   local output
   output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} "https://api.stripe.com/v1/terminal/locations" -u "$SECRET_KEY":)
-  echo "$output" | jq -r -c '.data[] | [.display_name, .id]'
+  printf '%s\n' "$output"
+  printf '%s\n' "$output" | jq -r -c '.data[] | [.display_name, .id]' >&2
   local count
-  count=$(echo "$output" | jq '.data | length')
+  count=$(printf '%s\n' "$output" | jq '.data | length')
   if [ "$count" -eq 1 ]; then
-    LOCATION_ID=$(echo "$output" | jq -r '.data[0].id')
+    LOCATION_ID=$(printf '%s\n' "$output" | jq -r '.data[0].id')
     export LOCATION_ID
-    echo "Only one location found. Setting LOCATION_ID=$LOCATION_ID"
+    jq -n -c --arg location_id "$LOCATION_ID" '{"message":"Only one location found. Setting LOCATION_ID","location_id":$location_id}' >&2
   fi
 }
 
@@ -1548,7 +1480,11 @@ curlreaderregister() {
 }
 
 curllocationscreate() {
-  curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/terminal/locations -u "$SECRET_KEY": -d display_name="$(date +%Y%m%d) test location" -d "address[line1]"="354 Oyster Point Blvd" -d "address[city]"="South San Francisco" -d "address[state]"="CA" -d "address[country]"="US" -d "address[postal_code]"="94080")
+  local date_part
+  date_part=$(date +%Y%m%d)
+  local unique_id
+  unique_id=$(printf "%05d" $(( $(date +%s) % 100000 )))
+  curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/terminal/locations -u "$SECRET_KEY": -d display_name="$date_part-$unique_id test location" -d "address[line1]"="354 Oyster Point Blvd" -d "address[city]"="South San Francisco" -d "address[state]"="CA" -d "address[country]"="US" -d "address[postal_code]"="94080")
   echo "$curl_output"
   LOCATION_ID=$(echo "$curl_output" | jq -r -c .id)
   export LOCATION_ID
@@ -1698,27 +1634,121 @@ curlpaymentintentcapture() {
 }
 
 curlpaymentintentcreate() {
-  currency="usd"
-  amount="5200"
-  extra_args=""
-  if [ "$#" -eq 3 ]; then
-    amount="$1"
-    currency="$2"
-    extra_args="$3"
+  local currency="usd"
+  local amount="5200"
+  local payment_methods="card_present"
+  local positional_args=()
+  local extra_args=()
+  local payment_method_args=()
+  local payment_method
+  local payment_method_count=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --amount)
+        if [ "$#" -lt 2 ]; then
+          echo "Missing value for --amount"
+          return 1
+        fi
+        amount="$2"
+        shift 2
+        ;;
+      --amount=*)
+        amount="${1#--amount=}"
+        shift
+        ;;
+      --currency)
+        if [ "$#" -lt 2 ]; then
+          echo "Missing value for --currency"
+          return 1
+        fi
+        currency="$2"
+        shift 2
+        ;;
+      --currency=*)
+        currency="${1#--currency=}"
+        shift
+        ;;
+      --payment-methods)
+        if [ "$#" -lt 2 ]; then
+          echo "Missing value for --payment-methods"
+          return 1
+        fi
+        payment_methods="$2"
+        shift 2
+        ;;
+      --payment-methods=*)
+        payment_methods="${1#--payment-methods=}"
+        shift
+        ;;
+      --)
+        shift
+        extra_args+=("$@")
+        break
+        ;;
+      -*)
+        echo "Unknown option: $1"
+        return 1
+        ;;
+      *)
+        positional_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [ "${#positional_args[@]}" -gt 3 ]; then
+    echo "Usage: curlpaymentintentcreate [amount [currency [extra curl args]]] [--amount AMOUNT] [--currency CURRENCY] [--payment-methods METHODS] [-- extra curl args...]"
+    return 1
   fi
-  if [ "$#" -eq 2 ]; then
-    amount="$1"
-    currency="$2"
+
+  if [ "${#positional_args[@]}" -ge 1 ]; then
+    amount="${positional_args[0]}"
   fi
-  if [ "$#" -eq 1 ]; then
-    amount="$1"
+  if [ "${#positional_args[@]}" -ge 2 ]; then
+    currency="${positional_args[1]}"
   fi
-  echo "before"
-  pi_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/payment_intents -u "$SECRET_KEY:" -d amount="$amount" -d currency="$currency" -d "payment_method_types[]"=card_present -d capture_method=manual ${extra_args:+"$extra_args"})
+  if [ "${#positional_args[@]}" -eq 3 ]; then
+    extra_args+=(${positional_args[2]})
+  fi
+
+  IFS=',' read -ra payment_method_args <<< "$payment_methods"
+  if [ "${#payment_method_args[@]}" -eq 0 ]; then
+    echo "At least one payment method is required"
+    return 1
+  fi
+
+  local curl_args=(-s)
+  if [ -n "$STRIPE_ACCOUNT_HEADER" ]; then
+    curl_args+=(-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER")
+  fi
+  curl_args+=(https://api.stripe.com/v1/payment_intents -u "$SECRET_KEY:" -d amount="$amount" -d currency="$currency")
+
+  for payment_method in "${payment_method_args[@]}"; do
+    payment_method="${payment_method#"${payment_method%%[![:space:]]*}"}"
+    payment_method="${payment_method%"${payment_method##*[![:space:]]}"}"
+    if [ -n "$payment_method" ]; then
+      curl_args+=(-d "payment_method_types[]=$payment_method")
+      payment_method_count=$((payment_method_count + 1))
+    fi
+  done
+  if [ "$payment_method_count" -eq 0 ]; then
+    echo "At least one payment method is required"
+    return 1
+  fi
+
+  curl_args+=(-d capture_method=manual)
+  curl_args+=("${extra_args[@]}")
+
+  pi_output=$(curl "${curl_args[@]}")
   echo "$pi_output"
   PAYMENT_INTENT_ID=$(echo "$pi_output" | jq -r -c .id)
   export PAYMENT_INTENT_ID
   echo "Setting PI ID: $PAYMENT_INTENT_ID"
+}
+
+curlcreatepaymentintent() {
+  curlpaymentintentcreate "$@"
 }
 
 curlpaymentintentupdate() {
@@ -1840,7 +1870,7 @@ curlreaderpresentpaymentmethod() {
 }
 
 curlreadersimplepaymentmoto() {
-  curlpaymentintentcreate 5200 usd '-d  payment_method_types[]=card'
+  curlpaymentintentcreate --payment-methods card
   curlreaderprocess "$PAYMENT_INTENT_ID" -d "process_config[moto]"=true
 }
 
@@ -1896,7 +1926,6 @@ appstart() {
   $CMD
 }
 export S10_ADB_DEVICE_ID="RF8N41V8P0T"
-export PIXEL_10_ADB_DEVICE_ID="57260DLCR000FJ"
 export WILLIAM_FINN_IPHONE_UDID="AFDB9FCD-F047-52C4-A90E-7C24C40A8D4B"
 
 gradletest() {
@@ -1963,38 +1992,37 @@ alias rmmvnlocal='rm -rvf ~/.m2/repository/com/stripe/stripeterminal*'
 alias rmgradlesnapshots="find ~/.gradle/caches/ -name '*stripe*SNAPSHOT' -exec rm -rvf {} \\;"
 alias adbpixel3='adb -s 8C9X1L79K'
 alias adbs10='adb -s $S10_ADB_DEVICE_ID'
-alias adbpixel10='adb -s $PIXEL_10_ADB_DEVICE_ID'
 
 alias adbreinstallapp='type adbreinstallapp; adbinstallhandoff && adb shell am start -n com.stripe.terminal.testapp/.MainActivity'
 # alias adbbuildapp='type adbbuildapp; ./gradlew :terminalapp:application:assembleDebug && adbreinstallapp'
 
 
-alias readerreinstalllatest='type readerreinstalllatest; APK_ROOT_DIR=$(find /Users/billfinn/stripe/reader-apks/ -maxdepth 1 -type d | grep "2\.[0-9][0-9]" | sort | tail -n 1); echo $APK_ROOT_DIR; adbreader install -t $APK_ROOT_DIR/com.stripe.updater-bbpos-debug.apk && adbreader install -t $APK_ROOT_DIR/com.stripe.reader-bbpos-debug.apk'
-alias readerreinstallapp='type readerreinstallapp; adbreader install -t ./terminalapp/application/build/outputs/apk/debug/application-debug.apk && adbreader shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone installing_app'
-alias readerreinstallreader='type readerreinstallreader; adbreader install ./reader/application/build/outputs/apk/bbpos/debug/com.stripe.reader-bbpos-debug.apk; saydone installing_reader'
-alias readerreinstallupdater='type readerreinstallupdater; adbreader install ./updater/application/build/outputs/apk/bbpos/debug/com.stripe.updater-bbpos-debug.apk; saydone installing_updater'
+alias readerreinstalllatest='type readerreinstalllatest; APK_ROOT_DIR=$(find /Users/billfinn/stripe/reader-apks/ -maxdepth 1 -type d | grep "2\.[0-9][0-9]" | sort | tail -n 1); echo $APK_ROOT_DIR; adb install -t $APK_ROOT_DIR/com.stripe.updater-bbpos-debug.apk && adb install -t $APK_ROOT_DIR/com.stripe.reader-bbpos-debug.apk'
+alias readerreinstallapp='type readerreinstallapp; adb install -t ./terminalapp/application/build/outputs/apk/debug/application-debug.apk && adb shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone installing_app'
+alias readerreinstallreader='type readerreinstallreader; adb install ./reader/application/build/outputs/apk/bbpos/debug/com.stripe.reader-bbpos-debug.apk; saydone installing_reader'
+alias readerreinstallupdater='type readerreinstallupdater; adb install ./updater/application/build/outputs/apk/bbpos/debug/com.stripe.updater-bbpos-debug.apk; saydone installing_updater'
 alias readerreinstallupdaterandreader='readerreinstallupdater && readerreinstallreader'
 
-alias readerreinstallverifonereader='type readerreinstallverifonereader; adbreader install -d ./reader/application/build/outputs/apk/verifone/debug/com.stripe.reader-verifone-debug.apk; saydone installing_verifone_reader'
-alias readerreinstallverifoneupdater='type readerreinstallverifoneupdater; adbreader install -d ./updater/application/build/outputs/apk/verifone/debug/com.stripe.updater-verifone-debug.apk; saydone installing_verifone_updater'
+alias readerreinstallverifonereader='type readerreinstallverifonereader; adb install -d ./reader/application/build/outputs/apk/verifone/debug/com.stripe.reader-verifone-debug.apk; saydone installing_verifone_reader'
+alias readerreinstallverifoneupdater='type readerreinstallverifoneupdater; adb install -d ./updater/application/build/outputs/apk/verifone/debug/com.stripe.updater-verifone-debug.apk; saydone installing_verifone_updater'
 alias readerreinstallverifoneupdaterandreader='readerreinstallverifoneupdater && readerreinstallverifonereader'
 
 alias standaloneassemble='type standaloneassemble; ./gradlew --configuration-cache :standalonepos:application:assembleDebug ; saydone'
 alias standaloneinstallDebug='type standaloneinstallDebug; ./gradlew --configuration-cache :standalonepos:application:installDebug ; saydone'
-alias standalonereinstall='type standalonereinstall; adbreader install -d ./standalonepos/application/build/outputs/apk/debug/application-debug.apk; saydone'
+alias standalonereinstall='type standalonereinstall; adb install -d ./standalonepos/application/build/outputs/apk/debug/application-debug.apk; saydone'
 
 alias terminalandroidassemble='type terminalandroidassemble; ./gradlew --configuration-cache :standalonepos:android:assembleDebug ; saydone'
 alias terminalandroidreinstall='type terminalandroidreinstall; adb install -d ./standalonepos/android/build/outputs/apk/debug/android-debug.apk && terminalandroidappstart; saydone'
 alias terminalandroidappstart='type terminalandroidappstart; adb shell am start -n com.stripe.standalonepos.android.debug/com.stripe.standalone.android.MainActivity'
 
-alias readerbuildapp='type readerbuildapp; ./gradlew --configuration-cache :terminalapp:application:installHandoff; adbreader shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone installing app'
-alias readerstartupdater='type readerstartupdater; adbreader shell am start -n com.stripe.updater/.MainActivity'
+alias readerbuildapp='type readerbuildapp; ./gradlew --configuration-cache :terminalapp:application:installHandoff; adb shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone installing app'
+alias readerstartupdater='type readerstartupdater; adb shell am start -n com.stripe.updater/.MainActivity'
 
 alias readerbuildupdater='type readerbuildupdater; readerassembledebugupdater && readerreinstallupdater; saydone building_updater'
 alias readerbuildreader='type readerbuildreader; readerassembledebugreader && readerreinstallreader; saydone building_reader'
 alias readerbuildupdaterandreader='type readerbuildupdaterandreader; readerbuildupdater && readerbuildreader'
 
-alias readerbuildupdaterandreaderrelease='type readerbuildupdaterandreaderrelease; ./gradlew :updater:application:assembleRelease && apksigner sign --ks $HOME/stripe/android/debug.keystore --ks-pass pass:android ./updater/application/build/outputs/apk/bbpos/release/com.stripe.updater-bbpos-release-unsigned.apk && adbreader install ./updater/application/build/outputs/apk/bbpos/release/com.stripe.updater-bbpos-release-unsigned.apk ; saydone building_updater && ./gradlew :reader:application:assembleRelease && apksigner sign --ks $HOME/stripe/android/debug.keystore --ks-pass pass:android ./reader/application/build/outputs/apk/bbpos/release/com.stripe.reader-bbpos-release-unsigned.apk && adbreader install ./reader/application/build/outputs/apk/bbpos/release/com.stripe.reader-bbpos-release-unsigned.apk; saydone building_reader'
+alias readerbuildupdaterandreaderrelease='type readerbuildupdaterandreaderrelease; ./gradlew :updater:application:assembleRelease && apksigner sign --ks $HOME/stripe/android/debug.keystore --ks-pass pass:android ./updater/application/build/outputs/apk/bbpos/release/com.stripe.updater-bbpos-release-unsigned.apk && adb install ./updater/application/build/outputs/apk/bbpos/release/com.stripe.updater-bbpos-release-unsigned.apk ; saydone building_updater && ./gradlew :reader:application:assembleRelease && apksigner sign --ks $HOME/stripe/android/debug.keystore --ks-pass pass:android ./reader/application/build/outputs/apk/bbpos/release/com.stripe.reader-bbpos-release-unsigned.apk && adb install ./reader/application/build/outputs/apk/bbpos/release/com.stripe.reader-bbpos-release-unsigned.apk; saydone building_reader'
 
 alias readerbuildall='type readerbuildall; readerbuildupdater && readerbuildreaderandapp'
 alias readerbuildreaderandapp='type readerbuildreaderandapp; readerbuildreader && readerbuildapp'

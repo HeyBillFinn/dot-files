@@ -17,6 +17,7 @@ JIRA_USER = os.environ.get("JIRA_USER", "billfinn")
 JIRA_HOST = "jira.corp.stripe.com"
 UNIX_PROXY = os.path.expanduser("~/.stripeproxy")
 COOKIE_FILE = os.path.expanduser("~/.jira.d/cookies.js")
+RANK_FIELD_ID = os.environ.get("JIRA_RANK_FIELD_ID")
 
 STATUS_EXCLUSION = (
     'status not in (Done, Resolved, "Won\'t Fix", "Won\'t Do", '
@@ -25,6 +26,7 @@ STATUS_EXCLUSION = (
 
 COLUMN_MAX_WIDTH = {
     "epic": 25,
+    "rank": 10,
     "component": 20,
     "status": 20,
     "assignee": 20,
@@ -69,9 +71,10 @@ MODES = {
     },
 }
 
-SORTABLE_FIELDS = ["status", "updated", "component"]
+SORTABLE_FIELDS = ["rank", "status", "updated", "component"]
 
 _comment_cache = {}
+_rank_field_id = RANK_FIELD_ID
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -90,7 +93,7 @@ def load_cookies():
     return "; ".join(f'{c["Name"]}={c["Value"]}' for c in cookies)
 
 
-def jira_request(method, path, body=None):
+def jira_request(method, path, body=None, allowed_statuses=(200, 201, 204)):
     conn = UnixHTTPConnection(UNIX_PROXY, JIRA_HOST)
     headers = {
         "Host": JIRA_HOST,
@@ -100,10 +103,13 @@ def jira_request(method, path, body=None):
     conn.request(method, path, body=body, headers=headers)
     resp = conn.getresponse()
     resp_body = resp.read()
-    if resp.status not in (200, 201, 204):
+    if resp.status not in allowed_statuses:
         raise RuntimeError(f"Jira API {resp.status}: {resp_body.decode()}")
     if resp_body:
-        return json.loads(resp_body)
+        try:
+            return json.loads(resp_body)
+        except json.JSONDecodeError:
+            return resp_body.decode()
     return None
 
 
@@ -117,6 +123,89 @@ def jira_post(path, data):
 
 def jira_put(path, data):
     return jira_request("PUT", path, body=json.dumps(data).encode())
+
+
+def jira_post_with_statuses(path, data, allowed_statuses):
+    return jira_request(
+        "POST",
+        path,
+        body=json.dumps(data).encode(),
+        allowed_statuses=allowed_statuses,
+    )
+
+
+def jira_put_with_statuses(path, data, allowed_statuses):
+    return jira_request(
+        "PUT",
+        path,
+        body=json.dumps(data).encode(),
+        allowed_statuses=allowed_statuses,
+    )
+
+
+def get_rank_field_id():
+    global _rank_field_id
+    if _rank_field_id:
+        return _rank_field_id
+
+    fields = jira_get("/rest/api/2/field")
+    for field in fields:
+        schema = field.get("schema") or {}
+        if (
+            field.get("name") == "Rank"
+            or schema.get("custom") == "com.pyxis.greenhopper.jira:gh-lexo-rank"
+        ):
+            _rank_field_id = field.get("id")
+            return _rank_field_id
+    return None
+
+
+def update_summary(ticket_key, summary):
+    jira_put(f"/rest/api/2/issue/{ticket_key}", {"fields": {"summary": summary}})
+
+
+def update_summary_async(ticket_key, summary, result_holder):
+    try:
+        update_summary(ticket_key, summary)
+    except Exception as e:
+        result_holder["error"] = str(e)
+    result_holder["done"] = True
+
+
+def update_epic_link(ticket_key, epic_key):
+    jira_put(f"/rest/api/2/issue/{ticket_key}", {"fields": {"customfield_10002": epic_key}})
+
+
+def update_epic_link_async(ticket_key, epic_key, result_holder):
+    try:
+        update_epic_link(ticket_key, epic_key)
+    except Exception as e:
+        result_holder["error"] = str(e)
+    result_holder["done"] = True
+
+
+def update_rank(ticket_key, target_key, placement):
+    payload = {"issues": [ticket_key]}
+    rank_field_id = get_rank_field_id()
+    if rank_field_id:
+        payload["rankCustomFieldId"] = int(rank_field_id.replace("customfield_", ""))
+    if placement == "after":
+        payload["rankAfterIssue"] = target_key
+    else:
+        payload["rankBeforeIssue"] = target_key
+    result = jira_put_with_statuses("/rest/agile/1.0/issue/rank", payload, (204, 207))
+    if result:
+        if isinstance(result, str):
+            raise RuntimeError(result)
+        raise RuntimeError(json.dumps(result))
+
+
+def update_rank_async(ticket_key, target_key, placement, result_holder):
+    try:
+        update_rank(ticket_key, target_key, placement)
+    except Exception as e:
+        result_holder["error"] = str(e)
+    result_holder["done"] = True
 
 
 def get_transitions(ticket_key):
@@ -155,15 +244,153 @@ def assign_ticket(ticket_key, username="billfinn"):
     jira_put(f"/rest/api/2/issue/{ticket_key}", {"fields": {"assignee": {"name": username}}})
 
 
-def prompt_for_assignee(stdscr):
+def assign_ticket_async(ticket_key, username, result_holder):
+    try:
+        assign_ticket(ticket_key, username)
+    except Exception as e:
+        result_holder["error"] = str(e)
+    result_holder["done"] = True
+
+
+def search_assignable_users(issue_key, query):
+    def _fetch(param_name):
+        params = urllib.parse.urlencode({
+            "issueKey": issue_key,
+            param_name: query,
+            "maxResults": 20,
+        })
+        return jira_get(f"/rest/api/2/user/assignable/search?{params}")
+
+    try:
+        users = _fetch("username")
+    except Exception:
+        users = _fetch("query")
+    if not isinstance(users, list):
+        return []
+    return [
+        user.get("name") or user.get("key")
+        for user in users
+        if user.get("name") or user.get("key")
+    ]
+
+
+def _assignee_completer(issue_key, candidates):
+    local_candidates = sorted({
+        c for c in [JIRA_USER, *(candidates or [])]
+        if c and c != "Unassigned"
+    })
+    cache = {}
+
+    def _matches(text):
+        normalized = text.lower()
+        matches = [
+            c for c in local_candidates
+            if c.lower().startswith(normalized)
+        ]
+        if issue_key and text:
+            remote_key = text.lower()
+            if remote_key not in cache:
+                try:
+                    cache[remote_key] = search_assignable_users(issue_key, text)
+                except Exception:
+                    cache[remote_key] = []
+            matches.extend(
+                c for c in cache[remote_key]
+                if c.lower().startswith(normalized)
+            )
+        return sorted(set(matches))
+
+    def _complete(text, state):
+        matches = _matches(text)
+        if state < len(matches):
+            return matches[state]
+        return None
+
+    return _complete
+
+
+def prompt_for_assignee(stdscr, issue_key=None, candidates=None):
     """Prompt for assignee username, prefilled with JIRA_USER. Returns username or None if cancelled."""
     curses.endwin()
     try:
-        username = input(f"Assignee [{JIRA_USER}]: ").strip()
+        import readline
+
+        old_completer = readline.get_completer()
+        old_delims = readline.get_completer_delims()
+        readline.set_completer(_assignee_completer(issue_key, candidates))
+        readline.set_completer_delims(" \t\n")
+        if readline.__doc__ and "libedit" in readline.__doc__:
+            readline.parse_and_bind("bind ^I rl_complete")
+        else:
+            readline.parse_and_bind("tab: complete")
+        try:
+            username = input(f"Assignee [{JIRA_USER}]: ").strip()
+        finally:
+            readline.set_completer(old_completer)
+            readline.set_completer_delims(old_delims)
+    except ImportError:
+        try:
+            username = input(f"Assignee [{JIRA_USER}]: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return None
     except (KeyboardInterrupt, EOFError):
         print()
         return None
     return username if username else JIRA_USER
+
+
+def prompt_for_summary(stdscr, ticket):
+    """Prompt for a replacement summary. Returns summary, "" for no-op, or None if cancelled."""
+    curses.endwin()
+    prompt = f"{ticket['key']} summary: "
+    current_summary = ticket["summary"]
+    try:
+        import readline
+
+        readline.set_startup_hook(lambda: readline.insert_text(current_summary))
+        try:
+            summary = input(prompt).strip()
+        finally:
+            readline.set_startup_hook()
+    except ImportError:
+        print(f"{ticket['key']} current summary:")
+        print(current_summary)
+        try:
+            summary = input("New summary (blank to keep, Ctrl-C to cancel): ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return None
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return None
+    return summary
+
+
+def prompt_for_epic_link(stdscr, ticket):
+    """Prompt for a replacement epic key. Returns key, "" to clear, or None if cancelled."""
+    curses.endwin()
+    prompt = f"{ticket['key']} epic key (blank to clear): "
+    current_epic_key = ticket.get("epic_key", "")
+    try:
+        import readline
+
+        readline.set_startup_hook(lambda: readline.insert_text(current_epic_key))
+        try:
+            epic_key = input(prompt).strip().upper()
+        finally:
+            readline.set_startup_hook()
+    except ImportError:
+        print(f"{ticket['key']} current epic: {current_epic_key or '(none)'}")
+        try:
+            epic_key = input("New epic key (blank to clear, Ctrl-C to cancel): ").strip().upper()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return None
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return None
+    return epic_key
 
 
 def add_comment(ticket_key, comment_body):
@@ -198,12 +425,31 @@ def fetch_tickets(mode_config):
     tickets = []
     start = 0
     batch = 100
+    try:
+        rank_field_id = get_rank_field_id()
+    except Exception:
+        rank_field_id = None
+    fields = [
+        "key",
+        "summary",
+        "description",
+        "status",
+        "issuetype",
+        "assignee",
+        "reporter",
+        "updated",
+        "components",
+        "customfield_10002",
+        "customfield_10004",
+    ]
+    if rank_field_id:
+        fields.append(rank_field_id)
     while True:
         params = urllib.parse.urlencode({
             "jql": mode_config["jql"],
             "startAt": start,
             "maxResults": batch,
-            "fields": "key,summary,description,status,issuetype,assignee,reporter,updated,components,customfield_10002,customfield_10004",
+            "fields": ",".join(fields),
         })
         data = jira_get(f"/rest/api/2/search?{params}")
         for issue in data.get("issues", []):
@@ -216,7 +462,7 @@ def fetch_tickets(mode_config):
             reporter = reporter_obj.get("displayName", "") if reporter_obj else ""
             components = [c.get("name", "") for c in f.get("components", [])]
             component = ", ".join(components) if components else ""
-            epic_name = f.get("customfield_10002") or ""
+            epic_key = f.get("customfield_10002") or ""
             tickets.append({
                 "key": issue["key"],
                 "summary": f.get("summary", ""),
@@ -224,7 +470,9 @@ def fetch_tickets(mode_config):
                 "status": f.get("status", {}).get("name", ""),
                 "type": f.get("issuetype", {}).get("name", ""),
                 "component": component,
-                "epic": epic_name,
+                "epic": epic_key,
+                "epic_key": epic_key,
+                "rank": f.get(rank_field_id, "") if rank_field_id else "",
                 "assignee": assignee,
                 "reporter": reporter,
                 "updated": f.get("updated", "")[:10],
@@ -276,10 +524,45 @@ def sort_tickets(tickets, sort_field, sort_reverse, columns):
         return tickets
     if sort_field == "component" and "component" not in columns:
         return tickets
+    if sort_field == "rank":
+        return sorted(tickets, key=lambda t: t.get("rank_override") or t.get("rank") or "~", reverse=sort_reverse)
     return sorted(tickets, key=lambda t: t.get(sort_field, "").lower(), reverse=sort_reverse)
 
 
-def draw_list(stdscr, tickets, cursor, scroll_offset, mode_config, selected=None, sort_field=None, sort_reverse=False, filter_info=None):
+def filter_tickets_by_assignee(tickets, assignee_filter):
+    if assignee_filter:
+        return [t for t in tickets if t.get("assignee") == assignee_filter]
+    return tickets
+
+
+def assignee_filter_values(tickets):
+    assignees = {
+        t.get("assignee") or "Unassigned"
+        for t in tickets
+    }
+    return sorted(assignees, key=lambda a: (a != JIRA_USER, a != "Unassigned", a.lower()))
+
+
+def next_assignee_filter(tickets, assignee_filter):
+    values = [None] + assignee_filter_values(tickets)
+    if not values:
+        return None
+    try:
+        idx = values.index(assignee_filter)
+    except ValueError:
+        return None
+    return values[(idx + 1) % len(values)]
+
+
+def assignee_filter_label(assignee_filter):
+    return f"assignee={assignee_filter}" if assignee_filter else None
+
+
+def assignee_candidates(tickets):
+    return [t.get("assignee") for t in tickets]
+
+
+def draw_list(stdscr, tickets, cursor, scroll_offset, mode_config, selected=None, sort_field=None, sort_reverse=False, filter_info=None, pending_rank_key=None):
     if selected is None:
         selected = set()
     height, width = stdscr.getmaxyx()
@@ -288,12 +571,13 @@ def draw_list(stdscr, tickets, cursor, scroll_offset, mode_config, selected=None
     list_height = height - header_lines - footer_lines
 
     sel_info = f"  ({len(selected)} selected)" if selected else ""
+    rank_info = "  [rank move pending]" if pending_rank_key else ""
     sort_info = ""
     if sort_field:
         arrow = "▼" if sort_reverse else "▲"
         sort_info = f"  [sort: {sort_field} {arrow}]"
     filter_str = f"  [filter: {filter_info}]" if filter_info else ""
-    title = f" {mode_config['title']} — {len(tickets)} open ticket(s){sel_info}{sort_info}{filter_str} "
+    title = f" {mode_config['title']} — {len(tickets)} open ticket(s){sel_info}{sort_info}{filter_str}{rank_info} "
     stdscr.attron(curses.A_BOLD)
     stdscr.addnstr(0, 0, title.center(width), width)
     stdscr.attroff(curses.A_BOLD)
@@ -335,7 +619,8 @@ def draw_list(stdscr, tickets, cursor, scroll_offset, mode_config, selected=None
             continue
 
         t = tickets[idx]
-        mark = "*" if idx in selected else " "
+        rank_pending = t["key"] == pending_rank_key
+        mark = ">" if rank_pending else "*" if idx in selected else " "
         parts = [f" {mark} {idx + 1:>4}. ", f"{t['key']:<{key_width}}"]
         for col in columns:
             if col in ("key", "summary"):
@@ -350,19 +635,27 @@ def draw_list(stdscr, tickets, cursor, scroll_offset, mode_config, selected=None
         summary = t["summary"][:summary_space]
         line = prefix + summary
 
-        if idx == cursor:
-            stdscr.attron(curses.color_pair(1))
+        if rank_pending:
+            attrs = curses.color_pair(2) | curses.A_BOLD
+        elif idx == cursor:
+            attrs = curses.color_pair(1)
+        else:
+            attrs = 0
+
+        if attrs:
+            stdscr.attron(attrs)
             stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
-            stdscr.attroff(curses.color_pair(1))
+            stdscr.attroff(attrs)
         else:
             stdscr.addnstr(row, 0, line.ljust(width - 1), width - 1)
 
     help_row = height - 2
     show_assign = "assignee" in columns
+    rank_help = " [K/J] move rank  [Enter] save rank  [s/f/r] cancel" if pending_rank_key else " [K/J] move rank  [Enter] save rank" if sort_field == "rank" and not sort_reverse else " [Enter] view"
     if show_assign:
-        help_text = " [.] select  [Enter] view  [m] comment  [a] assign  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [v] browse  [r] refresh  [q] quit"
+        help_text = f" [.] select {rank_help}  [e] summary  [E] epic  [m] comment  [a] assign  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [v] browse  [r] refresh  [q] quit"
     else:
-        help_text = " [.] select  [Enter] view  [m] comment  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [v] browse  [r] refresh  [q] quit"
+        help_text = f" [.] select {rank_help}  [e] summary  [E] epic  [m] comment  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [v] browse  [r] refresh  [q] quit"
     stdscr.attron(curses.A_DIM)
     stdscr.addnstr(help_row, 0, help_text.center(width), width - 1)
     stdscr.attroff(curses.A_DIM)
@@ -372,6 +665,10 @@ def build_detail_lines(ticket, comments, content_width, loading=False, error=Non
     lines = []
     lines.append(f"{ticket['key']}: {ticket['summary']}")
     lines.append(f"Type: {ticket['type']}  |  Status: {ticket['status']}  |  Assignee: {ticket['assignee']}")
+    if ticket.get("epic"):
+        lines.append(f"Epic: {ticket['epic']}")
+    if ticket.get("rank"):
+        lines.append(f"Rank: {ticket['rank']}")
     lines.append(f"Updated: {ticket['updated']}  |  https://go/jira/{ticket['key']}")
     lines.append("")
     for paragraph in ticket["description"].split("\n"):
@@ -420,9 +717,9 @@ def render_detail(stdscr, lines, scroll, width, height, mode_config):
             pass
 
     if "assignee" in mode_config.get("columns", DEFAULT_COLUMNS):
-        help_text = " [j/k] prev/next  [m] comment  [a] assign  [b] backlog  [x] Won't Fix  [d] done  [v] browse  [r] refresh  [Enter/q] back"
+        help_text = " [j/k] prev/next  [e] summary  [E] epic  [m] comment  [a] assign  [b] backlog  [x] Won't Fix  [d] done  [v] browse  [r] refresh  [Enter/q] back"
     else:
-        help_text = " [j/k] prev/next  [m] comment  [b] backlog  [x] Won't Fix  [d] done  [v] browse  [r] refresh  [Enter/q] back"
+        help_text = " [j/k] prev/next  [e] summary  [E] epic  [m] comment  [b] backlog  [x] Won't Fix  [d] done  [v] browse  [r] refresh  [Enter/q] back"
     stdscr.attron(curses.A_DIM)
     try:
         stdscr.addnstr(height - 1, 0, help_text.center(width), width - 1)
@@ -525,11 +822,221 @@ def with_status(stdscr, msg, fn):
 
 def show_message(stdscr, msg):
     height, width = stdscr.getmaxyx()
-    stdscr.move(height - 1, 0)
-    stdscr.clrtoeol()
-    stdscr.addnstr(height - 1, 0, msg + "  [press any key]", width - 1)
+    stdscr.timeout(-1)
+    lines = textwrap.wrap(msg, width=max(20, width - 4)) or [""]
+    lines.append("[press any key]")
+    start_row = max(0, height - len(lines))
+    for row in range(start_row, height):
+        stdscr.move(row, 0)
+        stdscr.clrtoeol()
+    for i, line in enumerate(lines[-height:]):
+        stdscr.addnstr(start_row + i, 0, line, width - 1)
     stdscr.refresh()
     stdscr.getch()
+
+
+def start_summary_update(ticket, new_summary, update_jobs):
+    if not new_summary or new_summary == ticket["summary"]:
+        return False
+
+    old_summary = ticket["summary"]
+    ticket["summary"] = new_summary
+    job = {
+        "done": False,
+        "label": "Summary update",
+        "ticket_key": ticket["key"],
+        "old_values": {"summary": old_summary},
+        "new_values": {"summary": new_summary},
+    }
+    thread = threading.Thread(
+        target=update_summary_async,
+        args=(ticket["key"], new_summary, job),
+        daemon=True,
+    )
+    thread.start()
+    update_jobs.append(job)
+    return True
+
+
+def start_epic_link_update(ticket, new_epic_key, update_jobs):
+    if new_epic_key is None:
+        return False
+
+    old_epic_key = ticket.get("epic_key", "")
+    if new_epic_key == old_epic_key:
+        return False
+
+    old_epic = ticket.get("epic", "")
+    ticket["epic_key"] = new_epic_key
+    ticket["epic"] = new_epic_key
+    job = {
+        "done": False,
+        "label": "Epic Link update",
+        "ticket_key": ticket["key"],
+        "old_values": {"epic_key": old_epic_key, "epic": old_epic},
+        "new_values": {"epic_key": new_epic_key, "epic": new_epic_key},
+    }
+    thread = threading.Thread(
+        target=update_epic_link_async,
+        args=(ticket["key"], new_epic_key or None, job),
+        daemon=True,
+    )
+    thread.start()
+    update_jobs.append(job)
+    return True
+
+
+def start_assignee_update(ticket, username, update_jobs):
+    if not username or username == ticket.get("assignee"):
+        return False
+
+    old_assignee = ticket.get("assignee", "Unassigned")
+    ticket["assignee"] = username
+    job = {
+        "done": False,
+        "label": "Assignee update",
+        "ticket_key": ticket["key"],
+        "old_values": {"assignee": old_assignee},
+        "new_values": {"assignee": username},
+    }
+    thread = threading.Thread(
+        target=assign_ticket_async,
+        args=(ticket["key"], username, job),
+        daemon=True,
+    )
+    thread.start()
+    update_jobs.append(job)
+    return True
+
+
+def capture_rank_overrides(tickets):
+    return {
+        ticket["key"]: {"rank_override": ticket.get("rank_override")}
+        for ticket in tickets
+    }
+
+
+def restore_rank_overrides(tickets, old_values_by_key):
+    if not old_values_by_key:
+        return
+    for ticket in tickets:
+        old_values = old_values_by_key.get(ticket["key"])
+        if old_values is not None:
+            restore_ticket_values(ticket, old_values)
+
+
+def assign_local_rank_overrides(tickets):
+    for idx, ticket in enumerate(tickets):
+        ticket["rank_override"] = f"{idx:08d}"
+
+
+def move_ranked_ticket(tickets, cursor, direction):
+    new_cursor = cursor + direction
+    if cursor < 0 or cursor >= len(tickets) or new_cursor < 0 or new_cursor >= len(tickets):
+        return cursor, False
+
+    ticket = tickets.pop(cursor)
+    tickets.insert(new_cursor, ticket)
+    assign_local_rank_overrides(tickets)
+    return new_cursor, True
+
+
+def rank_target_for_position(tickets, ticket_key):
+    idx = find_ticket_index(tickets, ticket_key, None)
+    if idx is None:
+        return None, None
+    if idx > 0:
+        return tickets[idx - 1]["key"], "after"
+    if idx + 1 < len(tickets):
+        return tickets[idx + 1]["key"], "before"
+    return None, None
+
+
+def enqueue_rank_update(ticket, target_key, placement, update_jobs, old_values_by_key=None):
+    if not target_key or target_key == ticket["key"]:
+        return False
+
+    job = {
+        "done": False,
+        "label": "Rank update",
+        "ticket_key": ticket["key"],
+        "old_values": (old_values_by_key or {}).get(ticket["key"], {"rank_override": ticket.get("rank_override")}),
+        "new_values": {"rank_override": ticket.get("rank_override")},
+        "old_values_by_key": old_values_by_key,
+    }
+    thread = threading.Thread(
+        target=update_rank_async,
+        args=(ticket["key"], target_key, placement, job),
+        daemon=True,
+    )
+    thread.start()
+    update_jobs.append(job)
+    return True
+
+
+def find_ticket_index(tickets, ticket_key, fallback):
+    for i, ticket in enumerate(tickets):
+        if ticket["key"] == ticket_key:
+            return i
+    if fallback is None:
+        return None
+    return min(fallback, max(0, len(tickets) - 1))
+
+
+def restore_ticket_values(ticket, values):
+    for field, value in values.items():
+        if value is None:
+            ticket.pop(field, None)
+        else:
+            ticket[field] = value
+
+
+def restore_failed_updates(tickets, failed_jobs):
+    by_key = {}
+    for job in failed_jobs:
+        by_key.setdefault(job["ticket_key"], []).append(job)
+        restore_rank_overrides(tickets, job.get("old_values_by_key"))
+    for ticket in tickets:
+        for job in by_key.get(ticket["key"], []):
+            new_values = job.get("new_values", {})
+            if all(ticket.get(field) == value for field, value in new_values.items()):
+                restore_ticket_values(ticket, job.get("old_values", {}))
+
+
+def refresh_after_failed_update(stdscr, mode_config, tickets, cursor, current_key=None, failed_jobs=None):
+    failed_label = failed_jobs[0].get("label", "Update") if failed_jobs else "Update"
+    failed_error = failed_jobs[0].get("error") if failed_jobs else None
+    try:
+        tickets = with_status(
+            stdscr,
+            f"{failed_label} failed; refreshing...",
+            lambda: fetch_tickets(mode_config),
+        )
+    except Exception as e:
+        restore_failed_updates(tickets, failed_jobs or [])
+        failure_details = f": {failed_error}" if failed_error else ""
+        show_message(stdscr, f"{failed_label} failed{failure_details}; refresh failed: {e}")
+        return tickets, cursor
+
+    if current_key:
+        cursor = find_ticket_index(tickets, current_key, cursor)
+    else:
+        cursor = min(cursor, max(0, len(tickets) - 1))
+    failure_details = f": {failed_error}" if failed_error else ""
+    show_message(stdscr, f"{failed_label} failed{failure_details}; refreshed from Jira.")
+    return tickets, cursor
+
+
+def completed_update_errors(update_jobs):
+    errors = []
+    pending = []
+    for job in update_jobs:
+        if not job.get("done"):
+            pending.append(job)
+        elif job.get("error"):
+            errors.append(job)
+    update_jobs[:] = pending
+    return errors
 
 
 def _restore_curses():
@@ -541,7 +1048,7 @@ def _restore_curses():
     return stdscr
 
 
-def show_description_screen(stdscr, tickets, cursor, mode_config):
+def show_description_screen(stdscr, tickets, cursor, mode_config, update_jobs):
     height, width = stdscr.getmaxyx()
     content_width = min(width - 4, 100)
     scroll = 0
@@ -575,6 +1082,28 @@ def show_description_screen(stdscr, tickets, cursor, mode_config):
                 if line.startswith("Loading comments"):
                     lines[li] = f"Loading comments... {spinner_frames[spinner_idx]}"
                     break
+
+        failed_jobs = completed_update_errors(update_jobs)
+        if failed_jobs:
+            stdscr.timeout(-1)
+            tickets, cursor = refresh_after_failed_update(
+                stdscr,
+                mode_config,
+                tickets,
+                cursor,
+                current_key=ticket["key"],
+                failed_jobs=failed_jobs,
+            )
+            if not tickets:
+                return tickets, cursor
+            ticket = tickets[cursor]
+            scroll = 0
+            lines, loading, result_holder = _init_detail_state(ticket, content_width)
+            stdscr.timeout(150 if loading else -1)
+            continue
+
+        if not loading:
+            stdscr.timeout(150 if update_jobs else -1)
 
         render_detail(stdscr, lines, scroll, width, height, mode_config)
 
@@ -622,24 +1151,49 @@ def show_description_screen(stdscr, tickets, cursor, mode_config):
                 lines, loading, result_holder = _init_detail_state(ticket, content_width)
                 stdscr.timeout(150 if loading else -1)
 
+        elif key == ord("e"):
+            new_summary = prompt_for_summary(stdscr, ticket)
+            stdscr = _restore_curses()
+            if start_summary_update(ticket, new_summary, update_jobs):
+                lines = build_detail_lines(
+                    ticket,
+                    result_holder.get("comments") if result_holder.get("done") else None,
+                    content_width,
+                    loading=loading,
+                    error=result_holder.get("error"),
+                )
+                stdscr.timeout(150)
+
+        elif key == ord("E"):
+            new_epic_key = prompt_for_epic_link(stdscr, ticket)
+            stdscr = _restore_curses()
+            if start_epic_link_update(ticket, new_epic_key, update_jobs):
+                lines = build_detail_lines(
+                    ticket,
+                    result_holder.get("comments") if result_holder.get("done") else None,
+                    content_width,
+                    loading=loading,
+                    error=result_holder.get("error"),
+                )
+                stdscr.timeout(150)
+
         elif key == ord("a") and "assignee" in mode_config.get("columns", DEFAULT_COLUMNS):
-            username = prompt_for_assignee(stdscr)
+            username = prompt_for_assignee(
+                stdscr,
+                issue_key=ticket["key"],
+                candidates=assignee_candidates(tickets),
+            )
             stdscr = _restore_curses()
             if username:
-                try:
-                    with_status(stdscr, f"Assigning {ticket['key']} to {username}...", lambda: assign_ticket(ticket["key"], username))
-                    show_message(stdscr, f"Assigned {ticket['key']} to {username}.")
-                    tickets = with_status(stdscr, "Refreshing...", lambda: fetch_tickets(mode_config))
-                    cursor = min(cursor, max(0, len(tickets) - 1))
-                    if not tickets:
-                        stdscr.timeout(-1)
-                        return tickets, cursor
-                    ticket = tickets[cursor]
-                    scroll = 0
-                    lines, loading, result_holder = _init_detail_state(ticket, content_width)
-                    stdscr.timeout(150 if loading else -1)
-                except Exception as e:
-                    show_message(stdscr, f"Failed to assign: {e}")
+                if start_assignee_update(ticket, username, update_jobs):
+                    lines = build_detail_lines(
+                        ticket,
+                        result_holder.get("comments") if result_holder.get("done") else None,
+                        content_width,
+                        loading=loading,
+                        error=result_holder.get("error"),
+                    )
+                    stdscr.timeout(150)
 
         elif key == ord("b"):
             comment_text = prompt_for_comment(stdscr)
@@ -723,6 +1277,7 @@ def curses_main(stdscr, mode_config):
     curses.curs_set(0)
     curses.use_default_colors()
     curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 
     tickets = with_status(stdscr, f"Fetching {mode_config['title']} tickets...", lambda: fetch_tickets(mode_config))
     cursor = 0
@@ -730,8 +1285,10 @@ def curses_main(stdscr, mode_config):
     selected = set()
     sort_field = None
     sort_reverse = False
-    assignee_filter = None  # None = no filter, "me" = current user
+    assignee_filter = None  # None = no filter; otherwise an assignee username or "Unassigned"
     columns = mode_config.get("columns", DEFAULT_COLUMNS)
+    update_jobs = []
+    pending_rank_move = None
 
     while True:
         height, width = stdscr.getmaxyx()
@@ -739,10 +1296,7 @@ def curses_main(stdscr, mode_config):
         footer_lines = 3
         list_height = height - header_lines - footer_lines
 
-        if assignee_filter == "me":
-            filtered_tickets = [t for t in tickets if t.get("assignee", "").lower() == JIRA_USER.lower()]
-        else:
-            filtered_tickets = tickets
+        filtered_tickets = filter_tickets_by_assignee(tickets, assignee_filter)
 
         if filtered_tickets:
             cursor = max(0, min(cursor, len(filtered_tickets) - 1))
@@ -756,14 +1310,56 @@ def curses_main(stdscr, mode_config):
 
         display_tickets = sort_tickets(filtered_tickets, sort_field, sort_reverse, columns)
 
+        failed_jobs = completed_update_errors(update_jobs)
+        if failed_jobs:
+            current_key = display_tickets[cursor]["key"] if display_tickets else None
+            tickets, cursor = refresh_after_failed_update(
+                stdscr,
+                mode_config,
+                tickets,
+                cursor,
+                current_key=current_key,
+                failed_jobs=failed_jobs,
+            )
+            scroll_offset = 0
+            selected.clear()
+            pending_rank_move = None
+            continue
+
+        stdscr.timeout(150 if update_jobs else -1)
+
         stdscr.clear()
-        filter_info = f"assignee={JIRA_USER}" if assignee_filter == "me" else None
-        draw_list(stdscr, display_tickets, cursor, scroll_offset, mode_config, selected, sort_field, sort_reverse, filter_info)
+        filter_info = assignee_filter_label(assignee_filter)
+        pending_rank_key = pending_rank_move["ticket_key"] if pending_rank_move else None
+        draw_list(stdscr, display_tickets, cursor, scroll_offset, mode_config, selected, sort_field, sort_reverse, filter_info, pending_rank_key)
         stdscr.refresh()
 
         key = stdscr.getch()
+        if key == -1:
+            continue
 
-        if key == curses.KEY_UP or key == ord("k"):
+        if key in (ord("K"), ord("J")):
+            if sort_field == "rank" and not sort_reverse and display_tickets:
+                old_values_by_key = None
+                if pending_rank_move is None:
+                    old_values_by_key = capture_rank_overrides(display_tickets)
+                elif pending_rank_move["ticket_key"] != display_tickets[cursor]["key"]:
+                    pending_cursor = find_ticket_index(display_tickets, pending_rank_move["ticket_key"], None)
+                    if pending_cursor is not None:
+                        cursor = pending_cursor
+
+                direction = -1 if key == ord("K") else 1
+                ticket_key = display_tickets[cursor]["key"]
+                cursor, moved = move_ranked_ticket(display_tickets, cursor, direction)
+                if moved:
+                    if pending_rank_move is None:
+                        pending_rank_move = {
+                            "ticket_key": ticket_key,
+                            "old_values_by_key": old_values_by_key,
+                        }
+                    selected.clear()
+
+        elif key == curses.KEY_UP or key == ord("k"):
             if cursor > 0:
                 cursor -= 1
 
@@ -799,6 +1395,9 @@ def curses_main(stdscr, mode_config):
                     cursor += 1
 
         elif key == ord("s"):
+            if pending_rank_move:
+                restore_rank_overrides(tickets, pending_rank_move["old_values_by_key"])
+                pending_rank_move = None
             available = [f for f in SORTABLE_FIELDS if f != "component" or "component" in columns]
             if not sort_field:
                 sort_field = available[0]
@@ -818,17 +1417,51 @@ def curses_main(stdscr, mode_config):
             selected.clear()
 
         elif key == ord("f"):
-            if assignee_filter is None:
-                assignee_filter = "me"
-            else:
-                assignee_filter = None
+            if pending_rank_move:
+                restore_rank_overrides(tickets, pending_rank_move["old_values_by_key"])
+                pending_rank_move = None
+            assignee_filter = next_assignee_filter(tickets, assignee_filter)
             cursor = 0
             scroll_offset = 0
             selected.clear()
 
         elif key == ord("\n"):
+            if pending_rank_move:
+                rank_tickets = sort_tickets(filtered_tickets, "rank", False, columns)
+                ticket_key = pending_rank_move["ticket_key"]
+                rank_cursor = find_ticket_index(rank_tickets, ticket_key, None)
+                if rank_cursor is not None:
+                    target_key, placement = rank_target_for_position(rank_tickets, ticket_key)
+                    if target_key:
+                        enqueue_rank_update(
+                            rank_tickets[rank_cursor],
+                            target_key,
+                            placement,
+                            update_jobs,
+                            old_values_by_key=pending_rank_move["old_values_by_key"],
+                        )
+                    cursor = rank_cursor
+                    scroll_offset = 0
+                pending_rank_move = None
+                selected.clear()
+            elif display_tickets:
+                tickets, cursor = show_description_screen(stdscr, display_tickets, cursor, mode_config, update_jobs)
+                selected.clear()
+
+        elif key == ord("e"):
             if display_tickets:
-                tickets, cursor = show_description_screen(stdscr, display_tickets, cursor, mode_config)
+                ticket = display_tickets[cursor]
+                new_summary = prompt_for_summary(stdscr, ticket)
+                stdscr = _restore_curses()
+                start_summary_update(ticket, new_summary, update_jobs)
+                selected.clear()
+
+        elif key == ord("E"):
+            if display_tickets:
+                ticket = display_tickets[cursor]
+                new_epic_key = prompt_for_epic_link(stdscr, ticket)
+                stdscr = _restore_curses()
+                start_epic_link_update(ticket, new_epic_key, update_jobs)
                 selected.clear()
 
         elif key == ord("m"):
@@ -856,23 +1489,17 @@ def curses_main(stdscr, mode_config):
 
         elif key == ord("a") and "assignee" in columns:
             if display_tickets:
-                username = prompt_for_assignee(stdscr)
+                targets = [display_tickets[i] for i in sorted(selected)] if selected else [display_tickets[cursor]]
+                username = prompt_for_assignee(
+                    stdscr,
+                    issue_key=targets[0]["key"],
+                    candidates=assignee_candidates(tickets),
+                )
                 stdscr = _restore_curses()
                 if username:
-                    targets = [display_tickets[i] for i in sorted(selected)] if selected else [display_tickets[cursor]]
-                    failed = []
-                    for i, t in enumerate(targets):
-                        try:
-                            with_status(stdscr, f"Assigning {t['key']} to {username} ({i+1}/{len(targets)})...", lambda tk=t["key"]: assign_ticket(tk, username))
-                        except Exception as e:
-                            failed.append((t["key"], e))
-                    if failed:
-                        show_message(stdscr, f"Failed to assign {len(failed)}/{len(targets)} ticket(s).")
-                    else:
-                        keys = ", ".join(t["key"] for t in targets)
-                        show_message(stdscr, f"Assigned {keys} to {username}.")
+                    for t in targets:
+                        start_assignee_update(t, username, update_jobs)
                     selected.clear()
-                    tickets = with_status(stdscr, "Refreshing...", lambda: fetch_tickets(mode_config))
                     cursor = min(cursor, max(0, len(tickets) - 1))
                     scroll_offset = 0
 
@@ -898,6 +1525,7 @@ def curses_main(stdscr, mode_config):
                         show_message(stdscr, f"{n} ticket(s) moved to Backlog.")
                     selected.clear()
                     tickets = with_status(stdscr, "Refreshing...", lambda: fetch_tickets(mode_config))
+                    pending_rank_move = None
                     cursor = min(cursor, max(0, len(tickets) - 1))
                     scroll_offset = 0
                 else:
@@ -925,6 +1553,7 @@ def curses_main(stdscr, mode_config):
                         show_message(stdscr, f"{n} ticket(s) marked Won't Fix.")
                     selected.clear()
                     tickets = with_status(stdscr, "Refreshing...", lambda: fetch_tickets(mode_config))
+                    pending_rank_move = None
                     cursor = min(cursor, max(0, len(tickets) - 1))
                     scroll_offset = 0
                 else:
@@ -952,6 +1581,7 @@ def curses_main(stdscr, mode_config):
                         show_message(stdscr, f"{n} ticket(s) moved to Done.")
                     selected.clear()
                     tickets = with_status(stdscr, "Refreshing...", lambda: fetch_tickets(mode_config))
+                    pending_rank_move = None
                     cursor = min(cursor, max(0, len(tickets) - 1))
                     scroll_offset = 0
                 else:
@@ -963,6 +1593,7 @@ def curses_main(stdscr, mode_config):
 
         elif key == ord("r"):
             tickets = with_status(stdscr, "Refreshing...", lambda: fetch_tickets(mode_config))
+            pending_rank_move = None
             cursor = 0
             scroll_offset = 0
             selected.clear()
