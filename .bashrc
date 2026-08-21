@@ -76,16 +76,115 @@ phe()
   fi
 }
 
-mov_to_webm_normal_speed() {
-  ffmpeg -i "$1" -an -filter:v "scale=800:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2" -c:v libvpx-vp9 -crf 23 "$1.webm"
-}
-
-mov_to_webm_small() {
-  ffmpeg -i "$1" -an -filter:v "scale=400:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2,setpts=PTS/1.5" -c:v libvpx-vp9 -crf 23 "$1.webm"
-}
-
 mov_to_webm() {
-  ffmpeg -nostats -i "$1" -an -filter:v "scale=800:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2,setpts=PTS/1.5" -c:v libvpx-vp9 -crf 23 "$1.webm"
+  local width=800
+  local speed_filter=""
+  local input=""
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -s|--small)
+        width=400
+        ;;
+      -f|--fast)
+        speed_filter=",setpts=PTS/1.5"
+        ;;
+      -h|--help)
+        echo "Usage: mov_to_webm [--small] [--fast] <input.mov>"
+        echo "  -s, --small  Scale to 400px wide (default: 800px)"
+        echo "  -f, --fast   Speed video up to 1.5x (default: normal speed)"
+        return 0
+        ;;
+      -*)
+        echo "Unknown option: $1" >&2
+        return 2
+        ;;
+      *)
+        if [ -n "$input" ]; then
+          echo "Only one input file is supported" >&2
+          return 2
+        fi
+        input="$1"
+        ;;
+    esac
+    shift
+  done
+
+  if [ -z "$input" ]; then
+    echo "Usage: mov_to_webm [--small] [--fast] <input.mov>" >&2
+    return 2
+  fi
+
+  ffmpeg -nostats -i "$input" -an \
+    -filter:v "scale=${width}:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2${speed_filter}" \
+    -c:v libvpx-vp9 -crf 23 "$input.webm"
+}
+
+mov_to_webm_and_upload() {
+  local -a conversion_options=()
+  local -a inputs=()
+  local verbose=false
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -s|--small|-f|--fast)
+        conversion_options+=("$1")
+        ;;
+      -v|--verbose)
+        verbose=true
+        ;;
+      -h|--help)
+        echo "Usage: mov_to_webm_and_upload [--small] [--fast] [--verbose] <input.mov> [input.mov ...]"
+        echo "  -s, --small    Scale to 400px wide (default: 800px)"
+        echo "  -f, --fast     Speed videos up to 1.5x (default: normal speed)"
+        echo "  -v, --verbose  Show GitHub attachment upload details"
+        return 0
+        ;;
+      --)
+        shift
+        inputs+=("$@")
+        break
+        ;;
+      -*)
+        echo "Unknown option: $1" >&2
+        return 2
+        ;;
+      *)
+        inputs+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if [ "${#inputs[@]}" -eq 0 ]; then
+    echo "Usage: mov_to_webm_and_upload [--small] [--fast] [--verbose] <input.mov> [input.mov ...]" >&2
+    return 2
+  fi
+
+  local input output
+  local -a webm_files=()
+  for input in "${inputs[@]}"; do
+    if [ ! -f "$input" ]; then
+      echo "mov_to_webm_and_upload: file not found: $input" >&2
+      return 1
+    fi
+  done
+
+  for input in "${inputs[@]}"; do
+    output="$input.webm"
+    printf 'Converting %s to %s\n' "$input" "$output" >&2
+    if ! mov_to_webm "${conversion_options[@]}" "$input"; then
+      echo "mov_to_webm_and_upload: conversion failed for $input" >&2
+      return 1
+    fi
+    webm_files+=("$output")
+  done
+
+  if [ "$verbose" = true ]; then
+    gh_image_upload --verbose -- "${webm_files[@]}"
+  else
+    gh_image_upload -- "${webm_files[@]}"
+  fi
 }
 
 mov_to_small() {
@@ -182,6 +281,7 @@ alias readersetupdatesenabled='./scripts/device-owner/reader-control-check.sh se
 alias readergenerateregistrationcode='./scripts/device-owner/reader-control.sh generateRegistrationCode && adb logcat -s DebugUpdaterControlReceiver -v raw'
 alias clauded='claude --dangerously-skip-permissions'
 alias cl='claude --dangerously-skip-permissions'
+alias cod='codex --approve-for-me'
 
 
 create_devbox() {
@@ -795,21 +895,21 @@ gdm() {
   git diff "$baseBranch"...HEAD "$@" -- . ':(exclude)*.png'
 }
 
-gfbandopenpr() {
+gh_checkout_and_open_pr() {
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
     return 1
   fi
   gfb "$1"
   # shellcheck disable=SC2119
-  openpr
+  gh_open_pr
 }
 
 gh_hostname() {
   git remote get-url origin | sed -e 's/^.*@//' -e 's/:.*//' -e 's/^https:\/\///'
 }
 
-ghprcreate() {
+gh_create_pr() {
   if [ "$#" -gt 2 ]; then
     echo "Illegal number of parameters"
     return 1
@@ -831,7 +931,7 @@ ghprcreate() {
   GH_HOST="$(gh_hostname)" gh pr create --body-file "$filename" --title "$title" -B "$baseBranch"
 }
 
-openpr() {
+gh_open_pr() {
   if [ "$#" -gt 1 ]; then
     echo "Illegal number of parameters"
     return 1
@@ -847,7 +947,7 @@ openpr() {
   isDraft=$(GH_HOST="$(gh_hostname)" gh pr view --json isDraft --jq '.isDraft' 2>/dev/null)
   if [[ "$isDraft" == "true" ]]; then
     echo "Draft PR exists, closing it first..."
-    closedraftpr
+    gh_close_draft_pr
   fi
 
   current_folder=$(basename "$PWD")
@@ -905,9 +1005,9 @@ openpr() {
   # Remove last blank line
   $sed_cmd -i '${/^$/d};' "$tmpFile"
 
-  ghprcreate $tmpFile $baseBranch
+  gh_create_pr $tmpFile $baseBranch
   echo "Disabling auto merge"
-  disableautomerge
+  gh_disable_auto_merge
 }
 
 gpush() {
@@ -973,11 +1073,11 @@ gpush() {
   echo "pr create: $((SECONDS - prcreate))s"
 
   echo "Disabling auto merge"
-  disableautomerge
+  gh_disable_auto_merge
   echo "total: $((SECONDS - start))s"
 }
 
-closedraftpr() {
+gh_close_draft_pr() {
   local isDraft
   isDraft=$(GH_HOST="$(gh_hostname)" gh pr view --json isDraft --jq '.isDraft')
   if [[ "$isDraft" != "true" ]]; then
@@ -988,7 +1088,155 @@ closedraftpr() {
   echo "Draft PR closed."
 }
 
-disableautomerge()
+# Recreate the current branch's draft PR as a clean, non-draft PR.
+# Source this file from .bashrc, or copy the function into it directly.
+gh_recreate_pr() {
+    if (($# != 0)); then
+        printf 'Usage: gh_recreate_pr\n' >&2
+        return 2
+    fi
+
+    local dependency
+    for dependency in git gh jq mktemp; do
+        if ! command -v "$dependency" >/dev/null 2>&1; then
+            printf 'gh_recreate_pr: required command not found: %s\n' "$dependency" >&2
+            return 1
+        fi
+    done
+
+    local branch expected_oid prs_json
+    if ! branch=$(git symbolic-ref --quiet --short HEAD); then
+        printf 'gh_recreate_pr: HEAD is detached; check out the PR branch first\n' >&2
+        return 1
+    fi
+    if ! expected_oid=$(git rev-parse --verify HEAD); then
+        printf 'gh_recreate_pr: could not resolve the current HEAD\n' >&2
+        return 1
+    fi
+
+    if ! prs_json=$(gh pr list \
+        --head "$branch" \
+        --state all \
+        --limit 100 \
+        --json number,title,body,state,isDraft,baseRefName,headRefName,headRefOid,url,createdAt); then
+        printf 'gh_recreate_pr: could not list PRs for branch %s\n' "$branch" >&2
+        return 1
+    fi
+
+    local open_pr
+    if ! open_pr=$(jq -c \
+        '[.[] | select(.state == "OPEN" and .isDraft == false)] | sort_by(.createdAt) | last // empty' \
+        <<<"$prs_json"); then
+        printf 'gh_recreate_pr: could not parse the PR list\n' >&2
+        return 1
+    fi
+
+    if [[ -n "$open_pr" ]]; then
+        local open_oid open_url
+        open_oid=$(jq -r '.headRefOid' <<<"$open_pr") || return 1
+        open_url=$(jq -r '.url' <<<"$open_pr") || return 1
+        if [[ "$open_oid" == "$expected_oid" ]]; then
+            printf 'A non-draft PR already exists for this HEAD: %s\n' "$open_url"
+            return 0
+        fi
+
+        printf 'gh_recreate_pr: an open non-draft PR exists, but its head (%s) does not match local HEAD (%s): %s\n' \
+            "$open_oid" "$expected_oid" "$open_url" >&2
+        printf 'Push the current branch or resolve the existing PR before retrying.\n' >&2
+        return 1
+    fi
+
+    local source_pr
+    if ! source_pr=$(jq -c --arg oid "$expected_oid" \
+        '[.[] | select(.isDraft == true and .headRefOid == $oid)] | sort_by(.createdAt) | last // empty' \
+        <<<"$prs_json"); then
+        printf 'gh_recreate_pr: could not parse the draft PR metadata\n' >&2
+        return 1
+    fi
+
+    if [[ -z "$source_pr" ]]; then
+        local latest_draft
+        latest_draft=$(jq -c \
+            '[.[] | select(.isDraft == true)] | sort_by(.createdAt) | last // empty' \
+            <<<"$prs_json") || return 1
+
+        if [[ -n "$latest_draft" ]]; then
+            printf 'gh_recreate_pr: the latest draft PR head (%s) does not match local HEAD (%s)\n' \
+                "$(jq -r '.headRefOid' <<<"$latest_draft")" "$expected_oid" >&2
+            printf 'Push the current branch, then retry. No PR was closed.\n' >&2
+        else
+            printf 'gh_recreate_pr: no draft PR was found for branch %s\n' "$branch" >&2
+        fi
+        return 1
+    fi
+
+    local source_number source_state source_title source_base source_head source_url
+    source_number=$(jq -r '.number' <<<"$source_pr") || return 1
+    source_state=$(jq -r '.state' <<<"$source_pr") || return 1
+    source_title=$(jq -r '.title' <<<"$source_pr") || return 1
+    source_base=$(jq -r '.baseRefName' <<<"$source_pr") || return 1
+    source_head=$(jq -r '.headRefName' <<<"$source_pr") || return 1
+    source_url=$(jq -r '.url' <<<"$source_pr") || return 1
+
+    local body_file
+    if ! body_file=$(mktemp "${TMPDIR:-/tmp}/recreate-pr.XXXXXX"); then
+        printf 'gh_recreate_pr: could not create a temporary body file\n' >&2
+        return 1
+    fi
+    trap 'rm -f "$body_file"' EXIT
+    if ! jq -j '.body // ""' <<<"$source_pr" >"$body_file"; then
+        printf 'gh_recreate_pr: could not save the draft PR body\n' >&2
+        return 1
+    fi
+
+    local current_oid
+    if ! current_oid=$(git rev-parse --verify HEAD) || [[ "$current_oid" != "$expected_oid" ]]; then
+        printf 'gh_recreate_pr: local HEAD changed during validation; retry the command\n' >&2
+        return 1
+    fi
+
+    if [[ "$source_state" == "OPEN" ]]; then
+        printf 'Closing draft PR #%s: %s\n' "$source_number" "$source_url"
+        if ! gh pr close "$source_number"; then
+            printf 'gh_recreate_pr: failed to close draft PR #%s\n' "$source_number" >&2
+            return 1
+        fi
+    else
+        printf 'Draft PR #%s is already closed; reusing its metadata.\n' "$source_number"
+    fi
+
+    local new_url
+    printf 'Creating a fresh non-draft PR from %s into %s...\n' "$source_head" "$source_base"
+    if ! new_url=$(gh pr create \
+        --base "$source_base" \
+        --head "$source_head" \
+        --title "$source_title" \
+        --body-file "$body_file"); then
+        printf 'gh_recreate_pr: PR creation failed; draft PR #%s remains closed\n' "$source_number" >&2
+        printf 'Run gh_recreate_pr again to retry using the closed draft metadata.\n' >&2
+        return 1
+    fi
+
+    local created_pr created_draft created_oid created_url
+    if ! created_pr=$(gh pr view "$new_url" --json isDraft,headRefOid,url); then
+        printf 'gh_recreate_pr: created %s but could not verify it\n' "$new_url" >&2
+        return 1
+    fi
+    created_draft=$(jq -r '.isDraft' <<<"$created_pr") || return 1
+    created_oid=$(jq -r '.headRefOid' <<<"$created_pr") || return 1
+    created_url=$(jq -r '.url' <<<"$created_pr") || return 1
+
+    if [[ "$created_draft" != "false" || "$created_oid" != "$expected_oid" ]]; then
+        printf 'gh_recreate_pr: replacement PR was created but verification failed: %s\n' "$created_url" >&2
+        printf 'Expected non-draft HEAD %s; received draft=%s HEAD=%s\n' \
+            "$expected_oid" "$created_draft" "$created_oid" >&2
+        return 1
+    fi
+
+    printf 'Created fresh non-draft PR: %s\n' "$created_url"
+}
+
+gh_disable_auto_merge()
 {
   branchName=$(git rev-parse --abbrev-ref HEAD)
   remoteUrl=$(git config --get remote.origin.url)
@@ -1000,7 +1248,7 @@ disableautomerge()
   echo
 }
 
-automerge()
+gh_enable_auto_merge()
 {
   branchName=$(git rev-parse --abbrev-ref HEAD)
   remoteUrl=$(git config --get remote.origin.url)
@@ -1012,13 +1260,329 @@ automerge()
   echo
 }
 
-alias ghcreateissue='gh issue create --web'
-alias mergepr='gh pr merge -m -d'
-alias ghimageupload='gh pr view 19498 --web'
+alias gh_merge_pr='gh pr merge -m -d'
 
-alias ghassignbricandjil='gh pr edit --add-assignee bric-stripe,jil-stripe'
+gh_image_upload_cleanup() {
+  if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--force" ]; }; then
+    echo "Usage: gh_image_upload_cleanup [--force]" >&2
+    return 2
+  fi
 
-viewpr() {
+  if ! command -v npx >/dev/null 2>&1; then
+    echo "gh_image_upload_cleanup: npx is required." >&2
+    return 1
+  fi
+
+  local session_name="stripe-ghe-attachments"
+  local force=false
+  local system_name
+  local cache_root
+  local daemon_root
+  local daemon_dir
+  local profile_dir
+  local lock_file
+  local lock_target
+  local lock_pid
+  local owner_info
+  local attempt
+
+  if [ "$#" -eq 1 ]; then
+    force=true
+  fi
+
+  # Ask Playwright to stop the named session first. This preserves the
+  # persistent profile and is enough when the daemon is still reachable.
+  npx --yes @playwright/cli@0.1.17 \
+    -s="$session_name" close >/dev/null 2>&1 || true
+
+  system_name=$(uname -s 2>/dev/null || echo unknown)
+  case "$system_name" in
+    Darwin)
+      cache_root="${HOME}/Library/Caches"
+      ;;
+    *)
+      cache_root="${XDG_CACHE_HOME:-$HOME/.cache}"
+      ;;
+  esac
+  daemon_root="$cache_root/ms-playwright/daemon"
+
+  # A crashed daemon can leave Chrome alive and holding SingletonLock. Look
+  # only in this session's profile, and only signal the PID encoded by that
+  # profile's lock symlink after verifying it has the profile open.
+  for daemon_dir in "$daemon_root"/*; do
+    [ -d "$daemon_dir" ] || continue
+    for profile_dir in "$daemon_dir"/ud-${session_name}-*; do
+      [ -d "$profile_dir" ] || continue
+      lock_file="$profile_dir/SingletonLock"
+      [ -L "$lock_file" ] || continue
+
+      lock_target=$(readlink "$lock_file" 2>/dev/null || true)
+      lock_pid=$(printf '%s\n' "$lock_target" | sed -n 's/.*-\([0-9][0-9]*\)$/\1/p')
+      if [ -z "$lock_pid" ] || ! kill -0 "$lock_pid" 2>/dev/null; then
+        rm -f -- "$profile_dir/SingletonLock" \
+          "$profile_dir/SingletonCookie" "$profile_dir/SingletonSocket"
+        echo "Removed stale Playwright lock: $profile_dir" >&2
+        continue
+      fi
+
+      owner_info=$(lsof -n -p "$lock_pid" 2>/dev/null | grep -F "$profile_dir" | head -1 || true)
+      if [ -z "$owner_info" ]; then
+        echo "gh_image_upload_cleanup: refusing to signal PID $lock_pid; it does not appear to own $profile_dir" >&2
+        return 1
+      fi
+
+      echo "Stopping orphaned Playwright Chrome (PID $lock_pid) for $session_name..." >&2
+      kill -TERM "$lock_pid" 2>/dev/null || true
+      for attempt in 1 2 3 4 5; do
+        sleep 1
+        [ -L "$lock_file" ] || break
+      done
+
+      if [ -L "$lock_file" ] && [ "$force" = true ]; then
+        echo "Chrome did not exit; forcing PID $lock_pid to stop." >&2
+        kill -KILL "$lock_pid" 2>/dev/null || true
+        sleep 1
+      fi
+
+      if [ -L "$lock_file" ]; then
+        echo "gh_image_upload_cleanup: Chrome still owns $profile_dir; retry with --force." >&2
+        return 1
+      fi
+    done
+  done
+}
+
+gh_image_upload_login() {
+  if [ "$#" -ne 0 ]; then
+    echo "Usage: gh_image_upload_login" >&2
+    return 2
+  fi
+
+  if ! command -v npx >/dev/null 2>&1; then
+    echo "gh_image_upload_login: npx is required." >&2
+    return 1
+  fi
+
+  # A running headless session cannot be converted to headed mode. Closing it
+  # preserves its persistent profile while allowing the browser to reopen visibly.
+  gh_image_upload_cleanup || return $?
+
+  npx --yes @playwright/cli@0.1.17 \
+    -s=stripe-ghe-attachments \
+    open --browser chrome --persistent --headed https://git.corp.stripe.com
+}
+
+gh_image_upload() (
+  if [ "$#" -eq 0 ]; then
+    set -- --clipboard
+  fi
+
+  local use_clipboard=false
+  local verbose=false
+  local -a attachments=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -c|--clipboard)
+        use_clipboard=true
+        ;;
+      -v|--verbose)
+        verbose=true
+        ;;
+      --)
+        shift
+        attachments+=("$@")
+        break
+        ;;
+      -*)
+        echo "Usage: gh_image_upload [-c|--clipboard] [-v|--verbose] [--] [FILE ...]" >&2
+        return 2
+        ;;
+      *)
+        attachments+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if [ "${#attachments[@]}" -eq 0 ]; then
+    use_clipboard=true
+  fi
+
+  _gh_image_upload_log() {
+    if [ "$verbose" = true ]; then
+      printf 'gh_image_upload: %s\n' "$*" >&2
+    fi
+  }
+
+  local dependency
+  for dependency in gh npx file pbcopy; do
+    if ! command -v "$dependency" >/dev/null 2>&1; then
+      echo "gh_image_upload: required command not found: $dependency" >&2
+      return 1
+    fi
+  done
+
+  local clipboard_dir=""
+  local clipboard_file=""
+  trap 'if [ -n "$clipboard_file" ]; then rm -f -- "$clipboard_file"; fi; if [ -n "$clipboard_dir" ]; then rmdir -- "$clipboard_dir" 2>/dev/null || true; fi' EXIT
+  if [ "$use_clipboard" = true ]; then
+    _gh_image_upload_log "reading PNG image from clipboard"
+    if ! command -v pngpaste >/dev/null 2>&1; then
+      echo "gh_image_upload: pngpaste is required to upload an image from the clipboard." >&2
+      return 1
+    fi
+    clipboard_dir=$(mktemp -d "${TMPDIR:-/tmp}/gh-image-clipboard.XXXXXX") || return 1
+    clipboard_file="$clipboard_dir/clipboard.png"
+    if ! pngpaste - > "$clipboard_file"; then
+      echo "gh_image_upload: the clipboard does not contain an image." >&2
+      return 1
+    fi
+    attachments=("$clipboard_file" "${attachments[@]}")
+    _gh_image_upload_log "captured clipboard image ($(wc -c < "$clipboard_file" | tr -d ' ') bytes)"
+  fi
+
+  local attachment
+  for attachment in "${attachments[@]}"; do
+    if [ ! -f "$attachment" ]; then
+      echo "gh_image_upload: file not found: $attachment" >&2
+      return 1
+    fi
+  done
+
+  local uploader="$HOME/dot-files/bin/gh-attach"
+  if [ ! -f "$uploader" ]; then
+    echo "gh_image_upload: uploader not found: $uploader" >&2
+    return 1
+  fi
+
+  local host repo issue
+  _gh_image_upload_log "resolving GitHub host and repository"
+  host=$(gh_hostname) || return 1
+  if ! repo=$(GH_HOST="$host" gh repo view --json nameWithOwner --jq .nameWithOwner); then
+    echo "gh_image_upload: could not resolve the current GitHub repository." >&2
+    return 1
+  fi
+  _gh_image_upload_log "repository: $host/$repo"
+
+  _gh_image_upload_log "looking up PR for the current branch"
+  if ! issue=$(GH_HOST="$host" gh pr view --json number --jq .number 2>/dev/null); then
+    issue=19498
+    if ! GH_HOST="$host" gh pr view "$issue" --json number --jq .number >/dev/null 2>&1; then
+      echo "gh_image_upload: the current branch has no PR and fallback PR #$issue was not found in $repo." >&2
+      return 1
+    fi
+    echo "No PR found for the current branch; using $repo#$issue as the upload context." >&2
+  fi
+  _gh_image_upload_log "upload context: $repo#$issue"
+
+  if [ "$verbose" = true ]; then
+    _gh_image_upload_log "resetting browser session so Chrome can reopen headed"
+    gh_image_upload_cleanup || return 1
+  fi
+
+  local -a markdown_lines=()
+  local url mime_type filename label attachment_index=0
+  for attachment in "${attachments[@]}"; do
+    attachment_index=$((attachment_index + 1))
+    _gh_image_upload_log "uploading $attachment_index/${#attachments[@]}: $attachment"
+    local -a uploader_args=(
+        --host "$host" \
+        --repo "$repo" \
+        --issue "$issue" \
+        --session stripe-ghe-attachments \
+        --keep-session \
+        --browser \
+        --url-only \
+        --image "$attachment"
+    )
+    if [ "$verbose" = true ]; then
+      uploader_args+=(--verbose --headed)
+    fi
+    if ! url=$(bash "$uploader" "${uploader_args[@]}"); then
+      echo "gh_image_upload: upload failed for $attachment." >&2
+      echo "Run gh_image_upload_login to establish or renew the GitHub SSO session." >&2
+      return 1
+    fi
+    _gh_image_upload_log "uploaded $attachment_index/${#attachments[@]}: $url"
+
+    if [[ "$url" != "https://$host/user-attachments/assets/"* ]]; then
+      echo "gh_image_upload: uploader returned an unexpected URL for $attachment: $url" >&2
+      return 1
+    fi
+
+    if [ -n "$clipboard_file" ] && [ "$attachment" = "$clipboard_file" ]; then
+      filename="clipboard.png"
+    else
+      filename=$(basename "$attachment")
+    fi
+    label=$(printf '%s' "$filename" | sed 's/\\/\\\\/g; s/]/\\]/g')
+    mime_type=$(file -b --mime-type "$attachment")
+    if [[ "$mime_type" == image/* ]]; then
+      markdown_lines+=("![$label]($url)")
+    else
+      markdown_lines+=("[$label]($url)")
+    fi
+  done
+
+  _gh_image_upload_log "copying ${#markdown_lines[@]} Markdown link(s) to clipboard"
+  printf '%s\n' "${markdown_lines[@]}" | pbcopy
+  printf '%s\n' "${markdown_lines[@]}"
+  echo "Attachment Markdown copied to the clipboard." >&2
+)
+
+gh_edit_pr_desc() {
+  if [ "$#" -gt 1 ]; then
+    echo "Usage: gh_edit_pr_desc [number|url|branch]" >&2
+    return 2
+  fi
+
+  local pr="${1:-}"
+  local edit_file body_file
+  edit_file=$(mktemp "${TMPDIR:-/tmp}/gh-pr-edit.XXXXXX") || return 1
+  body_file=$(mktemp "${TMPDIR:-/tmp}/gh-pr-body.XXXXXX") || {
+    rm -f "$edit_file"
+    return 1
+  }
+
+  if ! gh pr view ${pr:+"$pr"} --json title,body \
+      --jq '.title + "\n\n" + (.body // "")' > "$edit_file"; then
+    rm -f "$edit_file" "$body_file"
+    return 1
+  fi
+
+  nvim -c "set formatoptions-=cro | lua require('config.functions').add_stripes()" "$edit_file" || {
+    rm -f "$edit_file" "$body_file"
+    echo "Editor exited unsuccessfully; PR title and description were not updated." >&2
+    return 1
+  }
+
+  local title separator
+  title=$(sed -n '1p' "$edit_file")
+  separator=$(sed -n '2p' "$edit_file")
+  if [ -z "$title" ] || [ -n "$separator" ]; then
+    rm -f "$edit_file" "$body_file"
+    echo "The first line must be a title followed by a blank line; PR was not updated." >&2
+    return 1
+  fi
+  tail -n +3 "$edit_file" > "$body_file"
+
+  if ! gh pr edit ${pr:+"$pr"} --body-file "$body_file"; then
+    rm -f "$edit_file" "$body_file"
+    echo "PR description was not updated; PR title was not updated." >&2
+    return 1
+  fi
+
+  if ! gh pr edit ${pr:+"$pr"} --title "$title"; then
+    rm -f "$edit_file" "$body_file"
+    echo "PR description was updated, but PR title was not updated." >&2
+    return 1
+  fi
+
+  rm -f "$edit_file" "$body_file"
+  return 0
+}
+
+gh_view_pr() {
   if gh pr view --web 2>/dev/null; then
     return
   fi
@@ -1212,9 +1776,6 @@ wb() {
 }
 
 #alias wb='work begin --no-pr --title '
-alias wpc='work pr create --with-edit'
-alias wr='work review $(cat ~/dot-files/.stripe-android-usernames.txt | fzf)'
-
 setsecretkey() {
   if [ "$#" -ne 1 ]; then
     echo "Illegal number of parameters"
@@ -1281,6 +1842,128 @@ setstripeaccountheader() {
 clearstripeaccountheader() {
   unset STRIPE_ACCOUNT_HEADER
   echo "Stripe-Account header cleared"
+}
+
+setstripelivemode() {
+  case "$1" in
+    true|false)
+      export STRIPE_LIVEMODE="$1"
+      echo "Stripe-Livemode header set to: $STRIPE_LIVEMODE"
+      ;;
+    *)
+      echo "Usage: setstripelivemode <true|false>"
+      return 1
+      ;;
+  esac
+}
+
+clearstripelivemode() {
+  unset STRIPE_LIVEMODE
+  echo "Stripe-Livemode header cleared"
+}
+
+curlstripe() {
+  local verbose=false
+  case "${1:-}" in
+    -v|--verbose)
+      verbose=true
+      shift
+      ;;
+  esac
+
+  if [ "$#" -lt 1 ]; then
+    echo "Usage: curlstripe [-v|--verbose] <path-or-url> [curl args...]"
+    return 1
+  fi
+  if [ -z "$SECRET_KEY" ]; then
+    echo "SECRET_KEY is not set. Use setsecretkey <secret_key>."
+    return 1
+  fi
+
+  local path="$1"
+  shift
+  local url
+  if [[ "$path" == http://* || "$path" == https://* ]]; then
+    url="$path"
+  elif [[ "$path" == /* ]]; then
+    url="https://api.stripe.com$path"
+  else
+    url="https://api.stripe.com/$path"
+  fi
+
+  local livemode="${STRIPE_LIVEMODE:-}"
+  if [ -z "$livemode" ]; then
+    case "$SECRET_KEY" in
+      *_live_*)
+        livemode=true
+        ;;
+      *)
+        livemode=false
+        ;;
+    esac
+  fi
+
+  local curl_args=(-s -X GET -H "Stripe-Livemode: $livemode")
+  if [ "$verbose" = true ]; then
+    curl_args+=(-v)
+  fi
+  if [ -n "$STRIPE_ACCOUNT_HEADER" ]; then
+    curl_args+=(-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER")
+  fi
+
+  curl "${curl_args[@]}" "$url" -u "$SECRET_KEY:" "$@"
+}
+
+curlstripeqa() {
+  local verbose=false
+  case "${1:-}" in
+    -v|--verbose)
+      verbose=true
+      shift
+      ;;
+  esac
+
+  if [ "$#" -lt 1 ]; then
+    echo "Usage: curlstripeqa [-v|--verbose] <path-or-url> [curl args...]"
+    return 1
+  fi
+  if [ -z "$SECRET_KEY" ]; then
+    echo "SECRET_KEY is not set. Use setsecretkey <secret_key>."
+    return 1
+  fi
+
+  local path="$1"
+  shift
+  local url
+  if [[ "$path" == http://* || "$path" == https://* ]]; then
+    url="$path"
+  elif [[ "$path" == /* ]]; then
+    url="https://qa-api.stripe.com$path"
+  else
+    url="https://qa-api.stripe.com/$path"
+  fi
+
+  local livemode="${STRIPE_LIVEMODE:-}"
+  if [ -z "$livemode" ]; then
+    case "$SECRET_KEY" in
+      *_live_*)
+        livemode=true
+        ;;
+      *)
+        livemode=false
+        ;;
+    esac
+  fi
+
+  local curl_args=(-s -X GET -H "Stripe-Livemode: $livemode")
+  if [ "$verbose" = true ]; then
+    curl_args+=(-v)
+  fi
+  if [ -n "$STRIPE_ACCOUNT_HEADER" ]; then
+    curl_args+=(-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER")
+  fi
+
+  curl "${curl_args[@]}" "$url" -u "$SECRET_KEY:" "$@"
 }
 
 curlaccountget() {
@@ -1637,7 +2320,7 @@ curlpaymentintentcreate() {
   local currency="usd"
   local amount="5200"
   local payment_methods="card_present"
-  local positional_args=()
+  local capture_method="manual"
   local extra_args=()
   local payment_method_args=()
   local payment_method
@@ -1681,6 +2364,18 @@ curlpaymentintentcreate() {
         payment_methods="${1#--payment-methods=}"
         shift
         ;;
+      --capture-method)
+        if [ "$#" -lt 2 ]; then
+          echo "Missing value for --capture-method"
+          return 1
+        fi
+        capture_method="$2"
+        shift 2
+        ;;
+      --capture-method=*)
+        capture_method="${1#--capture-method=}"
+        shift
+        ;;
       --)
         shift
         extra_args+=("$@")
@@ -1691,26 +2386,12 @@ curlpaymentintentcreate() {
         return 1
         ;;
       *)
-        positional_args+=("$1")
-        shift
+        echo "Unexpected argument: $1"
+        echo "Usage: curlpaymentintentcreate [--amount AMOUNT] [--currency CURRENCY] [--payment-methods METHODS] [--capture-method CAPTURE_METHOD] [-- extra curl args...]"
+        return 1
         ;;
     esac
   done
-
-  if [ "${#positional_args[@]}" -gt 3 ]; then
-    echo "Usage: curlpaymentintentcreate [amount [currency [extra curl args]]] [--amount AMOUNT] [--currency CURRENCY] [--payment-methods METHODS] [-- extra curl args...]"
-    return 1
-  fi
-
-  if [ "${#positional_args[@]}" -ge 1 ]; then
-    amount="${positional_args[0]}"
-  fi
-  if [ "${#positional_args[@]}" -ge 2 ]; then
-    currency="${positional_args[1]}"
-  fi
-  if [ "${#positional_args[@]}" -eq 3 ]; then
-    extra_args+=(${positional_args[2]})
-  fi
 
   IFS=',' read -ra payment_method_args <<< "$payment_methods"
   if [ "${#payment_method_args[@]}" -eq 0 ]; then
@@ -1737,7 +2418,7 @@ curlpaymentintentcreate() {
     return 1
   fi
 
-  curl_args+=(-d capture_method=manual)
+  curl_args+=(-d capture_method="$capture_method")
   curl_args+=("${extra_args[@]}")
 
   pi_output=$(curl "${curl_args[@]}")
@@ -1745,10 +2426,6 @@ curlpaymentintentcreate() {
   PAYMENT_INTENT_ID=$(echo "$pi_output" | jq -r -c .id)
   export PAYMENT_INTENT_ID
   echo "Setting PI ID: $PAYMENT_INTENT_ID"
-}
-
-curlcreatepaymentintent() {
-  curlpaymentintentcreate "$@"
 }
 
 curlpaymentintentupdate() {
@@ -2072,6 +2749,15 @@ alias glstag='git log --tags --simplify-by-decoration --pretty="format:%ci %d" |
 alias gamend='git commit --no-verify --amend --no-edit'
 # alias gm='git checkout master'
 alias gfo='git fetch origin && [ `git rev-parse --abbrev-ref HEAD` == $(default_branch) ] && gmr || git fetch . origin/$(default_branch):$(default_branch)'
+gfor() {
+  local branch remote merge_ref upstream_ref
+  branch=$(git symbolic-ref --quiet --short HEAD) || return 1
+  remote=$(git config --get "branch.$branch.remote") || return 1
+  merge_ref=$(git config --get "branch.$branch.merge") || return 1
+  upstream_ref=$(git rev-parse --symbolic-full-name '@{u}') || return 1
+
+  git fetch "$remote" "+$merge_ref:$upstream_ref" && git reset --hard '@{u}'
+}
 alias gmr='git merge --ff-only @{u}'
 alias gmain='git checkout $(default_branch) && git fetch origin && git merge --ff-only @{u}'
 alias gfetchdefaultbranch='git fetch origin && git update-ref refs/heads/$(default_branch) origin/$(default_branch) && (git ls-remote --exit-code --heads origin master-passing-tests >/dev/null 2>&1 && git update-ref refs/heads/master-passing-tests origin/master-passing-tests || true)'
