@@ -1,0 +1,659 @@
+#!/usr/bin/env bash
+# Vendored from atani/gh-attach v0.7.4, commit cdacf1c.
+# Local changes pin Playwright and adapt its current session syntax.
+set -euo pipefail
+
+VERSION="0.7.4-dotfiles.1"
+
+usage() {
+  cat <<'USAGE'
+Usage: gh-attach --issue <number> --image <path> [--image <path>...] [options]
+
+Options:
+  --repo <owner/repo>   Target repository (default: current repo)
+  --issue <number>      Issue or PR number (required)
+  --image <path>        Image file path to upload (required, can be repeated)
+  --width <px>          Image width in pixels (default: 800)
+  --body <text>         Comment body text
+  --body-file <path>    Read comment body from file
+  --host <host>         GitHub host (auto-detected)
+  --release             Use GitHub Releases for upload (no browser needed)
+  --release-tag <tag>   Release tag for uploads (default: gh-attach-assets)
+  --browser             Force browser mode (skip direct upload)
+  --headed              Run browser in headed mode (visible)
+  --session <name>      playwright-cli session name to reuse. Pair this
+                        with --keep-session and a one-time persistent open
+                        (`playwright-cli -s=NAME open --persistent URL`)
+                        to keep SSO/SAML login across invocations.
+  --keep-session        Do not stop the browser on exit, preserving
+                        session-only cookies and "remember this device"
+                        state. Required for reusing a --session across
+                        many uploads without re-authenticating.
+  --url-only            Print uploaded asset URLs to stdout (one per line)
+                        and skip both comment creation and update.
+                        --issue is still required because the issue/PR
+                        page is the authenticated context used to reach
+                        the upload form.
+  --verbose             Print browser navigation and upload progress
+  -h, --help            Show help
+  --version             Show version
+
+Upload Modes:
+  Browser mode (default):
+    Uses pinned @playwright/cli via npx for browser automation.
+    Requires: npx, browser login
+
+  Release mode (--release):
+    Uses GitHub Releases API to upload images.
+    Requires: gh CLI authentication only (no browser needed)
+    Note: Creates a release tag in your repository
+
+  Direct mode (auto-detected):
+    Uses upload policies API via browser auth + curl upload.
+    Produces user-attachments URLs without release artifacts.
+    Auto-enabled for hosts listed in ~/.config/gh-attach/config
+    Use --browser to override and force browser mode.
+
+Configuration:
+  ~/.config/gh-attach/config
+    direct_hosts=host1,host2   Hosts that use direct upload mode
+
+Placeholders:
+  <!-- gh-attach:IMAGE -->      Single image (replaced by first image)
+  <!-- gh-attach:IMAGE:1 -->    Numbered placeholder for multiple images
+  <!-- gh-attach:IMAGE:2 -->    (numbers start from 1)
+
+Examples:
+  # Browser mode (default)
+  gh-attach --issue 123 --image ./screenshot.png
+
+  # Release mode (no browser, CLI auth only)
+  gh-attach --issue 123 --image ./screenshot.png --release
+
+  # Force browser mode (override direct mode)
+  gh-attach --issue 123 --image ./screenshot.png --browser
+
+  # With custom body
+  gh-attach --issue 123 --image ./e2e.png --body 'Result: <!-- gh-attach:IMAGE -->'
+
+  # Reuse a persistent SSO session (eg. GitHub Enterprise behind SAML):
+  #   one-time:  npx --yes @playwright/cli@0.1.17 -s=ghe open --persistent https://ghe.example.com
+  #   uploads:   gh-attach --session ghe --keep-session --url-only \
+  #                --host ghe.example.com --repo owner/repo --issue 1 --image ./a.png
+USAGE
+}
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "gh CLI is required." >&2
+  exit 1
+fi
+
+repo=""
+issue=""
+images=()
+width="800"
+body=""
+body_file=""
+host=""
+headed=""
+use_release=""
+use_browser=""
+release_tag="gh-attach-assets"
+session_name=""
+keep_session=""
+url_only=""
+verbose=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) repo="$2"; shift 2;;
+    --issue) issue="$2"; shift 2;;
+    --image) images+=("$2"); shift 2;;
+    --width) width="$2"; shift 2;;
+    --body) body="$2"; shift 2;;
+    --body-file) body_file="$2"; shift 2;;
+    --host) host="$2"; shift 2;;
+    --release) use_release="true"; shift;;
+    --release-tag) release_tag="$2"; shift 2;;
+    --browser) use_browser="true"; shift;;
+    --headed) headed="--headed"; shift;;
+    --session) session_name="$2"; shift 2;;
+    --keep-session) keep_session="true"; shift;;
+    --url-only) url_only="true"; shift;;
+    -v|--verbose) verbose="true"; shift;;
+    -h|--help) usage; exit 0;;
+    --version) echo "gh-attach $VERSION"; exit 0;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+verbose_log() {
+  if [[ -n "$verbose" ]]; then
+    printf 'gh-attach: %s\n' "$*" >&2
+  fi
+}
+
+# Check the pinned Playwright CLI launcher for browser and direct modes.
+if [[ -z "$use_release" ]]; then
+  if ! command -v npx >/dev/null 2>&1; then
+    echo "npx is required for browser/direct mode." >&2
+    echo "Or use --release flag for CLI-only mode (no browser needed)." >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "$issue" || ${#images[@]} -eq 0 ]]; then
+  echo "--issue and at least one --image are required." >&2
+  usage
+  exit 1
+fi
+
+if [[ -n "$body" && -n "$body_file" ]]; then
+  echo "Use only one of --body or --body-file." >&2
+  exit 1
+fi
+
+abs_images=()
+for img in "${images[@]}"; do
+  if [[ ! -f "$img" ]]; then
+    echo "Image not found: $img" >&2
+    exit 1
+  fi
+  # Normalize to absolute path (resolves symlinks so /tmp -> /private/tmp on macOS)
+  abs=$(cd "$(dirname "$img")" && pwd -P)/$(basename "$img")
+  abs_images+=("$abs")
+done
+images=("${abs_images[@]}")
+
+# playwright-cli sandbox: daemon allowed_roots follows the parent shell's cwd
+# at invocation time, NOT the subshell's cwd. cd here so uploads work when
+# the caller is in an unrelated directory.
+if [[ -z "$use_release" && ${#images[@]} -gt 0 ]]; then
+  cd "$(dirname "${images[0]}")"
+fi
+
+# Run the reviewed Playwright CLI version through the npm cache.
+pw_cli=(npx --yes @playwright/cli@0.1.17)
+if [[ -n "$session_name" ]]; then
+  pw_cli+=("-s=$session_name")
+fi
+
+# --persistent is required when --session is given so that the named session's
+# on-disk user-data-dir (and its cookies/SSO state) is reused instead of being
+# replaced by an in-memory transient profile.
+pw_open_extra=()
+if [[ -n "$session_name" ]]; then
+  pw_open_extra+=(--persistent)
+fi
+
+pw_stop() {
+  if [[ -n "$keep_session" ]]; then
+    return 0
+  fi
+  "${pw_cli[@]}" close >/dev/null 2>&1 || true
+}
+
+if [[ -n "$body_file" ]]; then
+  body="$(cat "$body_file")"
+fi
+
+if [[ -z "$repo" ]]; then
+  if [[ -n "$host" ]]; then
+    repo="$(gh repo view --hostname "$host" --json nameWithOwner -q .nameWithOwner)"
+  else
+    repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+  fi
+fi
+
+if [[ -z "$host" ]]; then
+  repo_url="$(gh repo view "$repo" --json url -q .url)"
+  host="$(echo "$repo_url" | sed -E 's#https?://([^/]+)/.*#\1#')"
+fi
+
+# Determine upload mode based on config
+use_direct=""
+if [[ -z "$use_release" && -z "$use_browser" ]]; then
+  config_file="${XDG_CONFIG_HOME:-$HOME/.config}/gh-attach/config"
+  if [[ -f "$config_file" ]]; then
+    direct_hosts=""
+    while IFS= read -r line; do
+      line="${line%%#*}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [[ -z "$line" ]] && continue
+      if [[ "$line" == direct_hosts=* ]]; then
+        direct_hosts="${line#direct_hosts=}"
+      fi
+    done < "$config_file"
+    IFS=',' read -ra hosts_array <<< "$direct_hosts"
+    for dhost in "${hosts_array[@]}"; do
+      dhost="${dhost#"${dhost%%[![:space:]]*}"}"
+      dhost="${dhost%"${dhost##*[![:space:]]}"}"
+      if [[ "$host" == "$dhost" ]]; then
+        use_direct="true"
+        break
+      fi
+    done
+  fi
+fi
+
+# Normalize escaped HTML comments (e.g. <\!-- from bash history expansion)
+body="${body//<\\!--/<!--}"
+
+# Build placeholder string for body
+placeholder_single="<!-- gh-attach:IMAGE -->"
+body_with_placeholder="$body"
+
+# Check if body has any placeholders
+has_placeholder=false
+if [[ "$body" == *"$placeholder_single"* ]]; then
+  has_placeholder=true
+fi
+for i in $(seq 1 ${#images[@]}); do
+  if [[ "$body" == *"<!-- gh-attach:IMAGE:$i -->"* ]]; then
+    has_placeholder=true
+  fi
+done
+
+# If no placeholders, add them at the end
+if [[ "$has_placeholder" == "false" ]]; then
+  if [[ ${#images[@]} -eq 1 ]]; then
+    if [[ -z "$body" ]]; then
+      body_with_placeholder="$placeholder_single"
+    else
+      body_with_placeholder="${body}"$'\n\n'"$placeholder_single"
+    fi
+  else
+    placeholders=""
+    for i in $(seq 1 ${#images[@]}); do
+      placeholders+="<!-- gh-attach:IMAGE:$i -->"$'\n'
+    done
+    if [[ -z "$body" ]]; then
+      body_with_placeholder="$placeholders"
+    else
+      body_with_placeholder="${body}"$'\n\n'"$placeholders"
+    fi
+  fi
+fi
+
+# Create comment with placeholders (skipped in --url-only mode).
+# In --url-only mode the caller posts their own comment with the returned URLs.
+if [[ -z "$url_only" ]]; then
+  comment_info="$(gh api --hostname "$host" -X POST "repos/$repo/issues/$issue/comments" -f body="$body_with_placeholder" --jq '"\(.id)\t\(.html_url)"')"
+  comment_id="${comment_info%%$'\t'*}"
+  comment_url="${comment_info#*$'\t'}"
+fi
+
+# Upload images
+upload_urls=()
+
+if [[ -n "$use_release" ]]; then
+  # Release mode: use gh release upload
+
+  # Build gh command with hostname if needed
+  gh_repo_flag="--repo $repo"
+  if [[ "$host" != "github.com" ]]; then
+    gh_repo_flag="--repo $host/$repo"
+  fi
+
+  # Check if release exists, create if not
+  # shellcheck disable=SC2086
+  if ! gh release view "$release_tag" $gh_repo_flag >/dev/null 2>&1; then
+    echo "Creating release '$release_tag' for image uploads..." >&2
+    # shellcheck disable=SC2086
+    gh release create "$release_tag" $gh_repo_flag --notes "Assets uploaded by gh-attach" --title "gh-attach assets" >/dev/null 2>&1
+  fi
+
+  # Upload each image with timestamp to avoid conflicts
+  timestamp=$(date +%Y%m%d%H%M%S)
+  for img in "${images[@]}"; do
+    basename_img="$(basename "$img")"
+    ext="${basename_img##*.}"
+    name="${basename_img%.*}"
+    unique_name="${name}-${timestamp}-$$.${ext}"
+
+    # Upload to release
+    # shellcheck disable=SC2086
+    gh release upload "$release_tag" "$img" --clobber $gh_repo_flag >/dev/null 2>&1 || {
+      # If clobber fails, try with unique name
+      cp "$img" "/tmp/$unique_name"
+      # shellcheck disable=SC2086
+      gh release upload "$release_tag" "/tmp/$unique_name" $gh_repo_flag >/dev/null 2>&1
+      rm -f "/tmp/$unique_name"
+      basename_img="$unique_name"
+    }
+
+    # Build download URL
+    upload_url="https://$host/$repo/releases/download/$release_tag/$basename_img"
+    upload_urls+=("$upload_url")
+  done
+elif [[ -n "$use_direct" ]]; then
+  # Direct mode: policy fetch via file-attachment component + file upload via curl
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required for direct upload mode." >&2
+    exit 1
+  fi
+
+  # Navigate to issue/PR page (need file-attachment component for policy fetch)
+  issue_url="https://$host/$repo/issues/$issue"
+  # shellcheck disable=SC2086
+  "${pw_cli[@]}" open --browser chrome "${pw_open_extra[@]}" "$issue_url" $headed >/dev/null 2>&1
+
+  # Wait for page to load (handle SSO/login redirects)
+  echo "Waiting for page to load..." >&2
+  max_wait=120
+  waited=0
+  while [[ $waited -lt $max_wait ]]; do
+    current_url=$("${pw_cli[@]}" eval "() => window.location.href" 2>/dev/null | grep -A1 '### Result' | tail -1 | tr -d '"' || echo "")
+    if [[ "$current_url" == *"$host"* && "$current_url" != *"/login"* && "$current_url" != *"/sso"* ]]; then
+      echo "Page loaded." >&2
+      break
+    fi
+    sleep 2
+    waited=$((waited + 2))
+    if [[ $((waited % 10)) -eq 0 ]]; then
+      echo "Still waiting for login... ($waited seconds)" >&2
+    fi
+  done
+
+  if [[ $waited -ge $max_wait ]]; then
+    echo "Timeout waiting for page load." >&2
+    pw_stop
+    exit 1
+  fi
+
+  # Upload each image: get policy via component, upload via curl
+  for img in "${images[@]}"; do
+    filename="$(basename "$img")"
+    filesize=$(wc -c < "$img" | tr -d ' ')
+    case "${filename##*.}" in
+      png) content_type="image/png";;
+      jpg|jpeg) content_type="image/jpeg";;
+      gif) content_type="image/gif";;
+      webp) content_type="image/webp";;
+      svg) content_type="image/svg+xml";;
+      *) content_type="application/octet-stream";;
+    esac
+    safe_filename="${filename//\'/\\\'}"
+
+    # Get upload policy by triggering file-attachment component with a fake file.
+    # Intercept the policy fetch response and block the actual XHR upload
+    # so the upload token stays valid for our curl upload.
+    js_code="async () => {
+      const buffer = new ArrayBuffer($filesize);
+      const file = new File([buffer], '${safe_filename}', {type: '${content_type}'});
+      const origFetch = window.fetch;
+      const origXhrOpen = XMLHttpRequest.prototype.open;
+      const origXhrSend = XMLHttpRequest.prototype.send;
+      let policyData = null;
+      window.fetch = async function(input, init) {
+        const url = typeof input === 'string' ? input : (input instanceof Request ? input.url : '');
+        if (url.includes('upload/policies')) {
+          const resp = await origFetch.apply(this, arguments);
+          policyData = await resp.clone().json();
+          return resp;
+        }
+        return origFetch.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.open = function(method, url) {
+        this.__url = url;
+        return origXhrOpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function(body) {
+        if (this.__url && !this.__url.startsWith(window.location.origin)) return;
+        return origXhrSend.apply(this, arguments);
+      };
+      const el = document.querySelector('file-attachment');
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      el.attach(dt);
+      await new Promise(r => setTimeout(r, 3000));
+      window.fetch = origFetch;
+      XMLHttpRequest.prototype.open = origXhrOpen;
+      XMLHttpRequest.prototype.send = origXhrSend;
+      return JSON.stringify(policyData);
+    }"
+
+    echo "Fetching upload policy: $filename..." >&2
+    eval_output=$("${pw_cli[@]}" eval "$js_code" 2>/dev/null)
+    policy=$(echo "$eval_output" | sed -n '/^### Result$/{ n; p; q; }' | jq -r '.')
+
+    upload_url=$(echo "$policy" | jq -r '.upload_url')
+    upload_token=$(echo "$policy" | jq -r '.upload_authenticity_token')
+
+    if [[ -z "$upload_url" || "$upload_url" == "null" ]]; then
+      echo "Failed to get upload policy for: $img" >&2
+      pw_stop
+      exit 1
+    fi
+
+    # Build curl command with auth headers, form fields, and file
+    curl_cmd=(curl -s -X POST "$upload_url")
+
+    while IFS= read -r hkey; do
+      [[ -z "$hkey" ]] && continue
+      hval=$(echo "$policy" | jq -r ".header[\"$hkey\"]")
+      curl_cmd+=(-H "$hkey: $hval")
+    done < <(echo "$policy" | jq -r '.header // {} | keys[]' 2>/dev/null)
+
+    curl_cmd+=(-F "authenticity_token=$upload_token")
+
+    while IFS= read -r fkey; do
+      [[ -z "$fkey" ]] && continue
+      fval=$(echo "$policy" | jq -r ".form[\"$fkey\"]")
+      curl_cmd+=(-F "$fkey=$fval")
+    done < <(echo "$policy" | jq -r '.form // {} | keys[]' 2>/dev/null)
+
+    curl_cmd+=(-F "file=@$img;type=$content_type")
+
+    echo "Uploading: $filename..." >&2
+    upload_response=$("${curl_cmd[@]}" 2>/dev/null)
+    asset_href=$(echo "$upload_response" | jq -r '.href')
+
+    if [[ -z "$asset_href" || "$asset_href" == "null" ]]; then
+      echo "Failed to upload: $img" >&2
+      echo "Response: $upload_response" >&2
+      pw_stop
+      exit 1
+    fi
+
+    upload_urls+=("$asset_href")
+
+    # Reload page for fresh tokens before next upload
+    if [[ "$img" != "${images[-1]}" ]]; then
+      "${pw_cli[@]}" reload >/dev/null 2>&1
+      sleep 3
+    fi
+  done
+
+  # Stop browser
+  pw_stop
+else
+  # Browser mode: use playwright-cli
+  # Works on github.com and on GitHub Enterprise Server (React-based issue pages).
+  # URL extraction reads textarea.value, not the accessibility snapshot's
+  # `src=` attribute, because modern GHE inserts markdown / <img> strings into
+  # the textarea without re-rendering a preview inside the accessibility tree.
+  issue_url="https://$host/$repo/issues/$issue"
+
+  # shellcheck disable=SC2086
+  verbose_log "opening $issue_url"
+  "${pw_cli[@]}" open "${pw_open_extra[@]}" "$issue_url" $headed >/dev/null 2>&1
+
+  # Wait for GitHub page to load (handle SSO/login redirects).
+  echo "Waiting for GitHub page to load..." >&2
+  max_wait=120
+  waited=0
+  previous_url=""
+  while [[ $waited -lt $max_wait ]]; do
+    current_url=$("${pw_cli[@]}" eval "() => window.location.href" 2>/dev/null | grep -A1 '### Result' | tail -1 | tr -d '"' || echo "")
+    if [[ -n "$verbose" && "$current_url" != "$previous_url" ]]; then
+      verbose_log "browser URL: ${current_url:-<unavailable>}"
+      previous_url="$current_url"
+    fi
+    if [[ "$current_url" == *"$host"* && ( "$current_url" == *"/issues/"* || "$current_url" == *"/pull/"* ) ]]; then
+      echo "GitHub page loaded." >&2
+      break
+    fi
+    sleep 2
+    waited=$((waited + 2))
+    if [[ $((waited % 10)) -eq 0 ]]; then
+      echo "Still waiting for login... ($waited seconds)" >&2
+    fi
+  done
+
+  if [[ $waited -ge $max_wait ]]; then
+    echo "Timeout waiting for GitHub page. Please make sure you are logged in." >&2
+    pw_stop
+    exit 1
+  fi
+
+  # Scroll so the comment form is in view.
+  "${pw_cli[@]}" eval "() => window.scrollTo(0, document.body.scrollHeight)" >/dev/null 2>&1
+  sleep 1
+
+  # --- helpers: scoped to the browser-mode block ---
+
+  # Find the live attachment button directly. Refs are re-issued as the page
+  # changes, so call this fresh before every upload. Avoid reading snapshot
+  # files: playwright-cli may write those relative to a different workspace.
+  _gha_find_drop_ref() {
+    local find_out ref
+    find_out=$("${pw_cli[@]}" find "Paste, drop, or click to add files" 2>&1)
+    ref=$(echo "$find_out" \
+      | grep -oE 'button "Paste, drop, or click to add files" \[ref=e[0-9]+\]' \
+      | head -1 \
+      | grep -oE 'e[0-9]+' || true)
+    [[ -z "$ref" ]] && return 1
+    echo "$ref"
+  }
+
+  _gha_textarea_value() {
+    "${pw_cli[@]}" eval \
+      "() => { const ta = document.querySelector('textarea'); return ta ? ta.value : ''; }" \
+      2>&1 | grep -A1 '### Result' | tail -1 | sed 's/^"//; s/"$//'
+  }
+
+  _gha_clear_textarea() {
+    "${pw_cli[@]}" eval \
+      "() => { const ta = document.querySelector('textarea'); if (ta) { ta.value = ''; ta.dispatchEvent(new Event('input', {bubbles:true})); } }" \
+      >/dev/null 2>&1 || true
+  }
+
+  # Count uploaded asset URLs in an arbitrary string. Multiple URLs may be
+  # concatenated on the same line inside the textarea, so grep -c (which
+  # counts lines) would under-count. Use grep -o + wc -l instead. In
+  # `set -o pipefail` mode a 0-match grep returns non-zero, so append
+  # `|| true` to keep the pipeline's exit status at 0 on empty input.
+  _gha_count_urls() {
+    echo "$1" | grep -oE "https://${host}/user-attachments/assets/[a-f0-9-]+" | wc -l | tr -d ' ' || true
+  }
+
+  # Remove any stale upload artifacts that another invocation may have left
+  # in the textarea. This guarantees the count-based progress check works.
+  _gha_clear_textarea
+
+  for img in "${images[@]}"; do
+    verbose_log "preparing upload: $img"
+    prev_count=$(_gha_count_urls "$(_gha_textarea_value)")
+
+    if ! drop_ref=$(_gha_find_drop_ref); then
+      echo "Could not find the PR attachment control on the authenticated page." >&2
+      pw_stop
+      exit 1
+    fi
+    verbose_log "attachment control: $drop_ref"
+
+    "${pw_cli[@]}" click "$drop_ref" >/dev/null 2>&1
+    sleep 1
+    verbose_log "sending file to browser: $img"
+
+    # `playwright-cli upload` still prints "Console: N errors, 0 warnings"
+    # on success. Detect real failures via exit code and path-specific
+    # error strings (File access denied / ENOENT) instead of a loose match.
+    set +e
+    upload_log=$("${pw_cli[@]}" upload "$img" 2>&1)
+    upload_rc=$?
+    set -e
+    if [[ $upload_rc -ne 0 ]] || echo "$upload_log" | grep -qE 'File access denied|ENOENT'; then
+      echo "playwright-cli upload failed for $img (rc=$upload_rc)" >&2
+      echo "$upload_log" | tail -5 >&2
+      echo "Hint: place all images under a directory that the playwright-cli" >&2
+      echo "daemon can reach (gh-attach cd's into the first image's dir)." >&2
+      pw_stop
+      exit 1
+    fi
+
+    # Wait for the upload URL to appear in the textarea (GHE also renders
+    # an "<!-- Failed to upload ... -->" marker on server-side rejections).
+    upload_url=""
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+      sleep 2
+      ta_val=$(_gha_textarea_value)
+      if echo "$ta_val" | grep -q '<!-- Failed to upload'; then
+        echo "Server rejected upload for $img (size/type limit?)" >&2
+        _gha_clear_textarea
+        pw_stop
+        exit 1
+      fi
+      cur_count=$(_gha_count_urls "$ta_val")
+      if [[ "$cur_count" -gt "$prev_count" ]]; then
+        upload_url=$(echo "$ta_val" | grep -oE "https://${host}/user-attachments/assets/[a-f0-9-]+" | tail -1 || true)
+        break
+      fi
+    done
+
+    if [[ -z "$upload_url" ]]; then
+      echo "Failed to get upload URL for: $img" >&2
+      pw_stop
+      exit 1
+    fi
+
+    upload_urls+=("$upload_url")
+    verbose_log "upload complete: $upload_url"
+  done
+
+  # Leave the textarea empty so the next invocation starts from a clean slate.
+  _gha_clear_textarea
+
+  pw_stop
+fi
+
+# --url-only: emit the uploaded URLs (one per line) and exit without touching comments.
+if [[ -n "$url_only" ]]; then
+  for url in "${upload_urls[@]}"; do
+    echo "$url"
+  done
+  exit 0
+fi
+
+# Replace placeholders with image tags
+body_with_images="$body_with_placeholder"
+
+for i in "${!images[@]}"; do
+  img="${images[$i]}"
+  url="${upload_urls[$i]}"
+  alt="$(basename "$img")"
+  img_tag="<img src=\"$url\" width=\"$width\" alt=\"$alt\">"
+
+  # Replace numbered placeholder first
+  num=$((i + 1))
+  body_with_images="${body_with_images//<!-- gh-attach:IMAGE:$num -->/$img_tag}"
+done
+
+# Replace single placeholder with first image (for backward compatibility)
+if [[ ${#images[@]} -ge 1 ]]; then
+  first_url="${upload_urls[0]}"
+  first_alt="$(basename "${images[0]}")"
+  first_img_tag="<img src=\"$first_url\" width=\"$width\" alt=\"$first_alt\">"
+  body_with_images="${body_with_images//$placeholder_single/$first_img_tag}"
+fi
+
+# Update the comment
+gh api --hostname "$host" -X PATCH "repos/$repo/issues/comments/$comment_id" -f body="$body_with_images" >/dev/null
+
+echo "Comment updated: $comment_url"
