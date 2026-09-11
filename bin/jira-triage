@@ -34,6 +34,8 @@ COLUMN_MAX_WIDTH = {
 }
 
 DEFAULT_COLUMNS = ["key", "component", "status", "type", "assignee", "summary"]
+UNASSIGNED = "Unassigned"
+UNASSIGN_ALIASES = {"none", "no one", "unassign", "unassigned"}
 
 MODES = {
     "reported": {
@@ -240,8 +242,15 @@ def transition_backlog(ticket_key, comment=None):
     transition_to(ticket_key, ["Backlog", "To Do", "Open"], comment=comment)
 
 
+def is_unassigned(username):
+    return username is None or (
+        isinstance(username, str) and username.strip().casefold() in UNASSIGN_ALIASES
+    )
+
+
 def assign_ticket(ticket_key, username="billfinn"):
-    jira_put(f"/rest/api/2/issue/{ticket_key}", {"fields": {"assignee": {"name": username}}})
+    assignee = None if is_unassigned(username) else {"name": username}
+    jira_put(f"/rest/api/2/issue/{ticket_key}", {"fields": {"assignee": assignee}})
 
 
 def assign_ticket_async(ticket_key, username, result_holder):
@@ -276,8 +285,8 @@ def search_assignable_users(issue_key, query):
 
 def _assignee_completer(issue_key, candidates):
     local_candidates = sorted({
-        c for c in [JIRA_USER, *(candidates or [])]
-        if c and c != "Unassigned"
+        c for c in [JIRA_USER, UNASSIGNED, *(candidates or [])]
+        if c
     })
     cache = {}
 
@@ -310,7 +319,7 @@ def _assignee_completer(issue_key, candidates):
 
 
 def prompt_for_assignee(stdscr, issue_key=None, candidates=None):
-    """Prompt for assignee username, prefilled with JIRA_USER. Returns username or None if cancelled."""
+    """Prompt for assignee username; enter Unassigned to remove the assignee."""
     curses.endwin()
     try:
         import readline
@@ -324,20 +333,22 @@ def prompt_for_assignee(stdscr, issue_key=None, candidates=None):
         else:
             readline.parse_and_bind("tab: complete")
         try:
-            username = input(f"Assignee [{JIRA_USER}]: ").strip()
+            username = input(f'Assignee [{JIRA_USER}] (or "Unassigned"): ').strip()
         finally:
             readline.set_completer(old_completer)
             readline.set_completer_delims(old_delims)
     except ImportError:
         try:
-            username = input(f"Assignee [{JIRA_USER}]: ").strip()
+            username = input(f'Assignee [{JIRA_USER}] (or "Unassigned"): ').strip()
         except (KeyboardInterrupt, EOFError):
             print()
             return None
     except (KeyboardInterrupt, EOFError):
         print()
         return None
-    return username if username else JIRA_USER
+    if not username:
+        return JIRA_USER
+    return UNASSIGNED if is_unassigned(username) else username
 
 
 def prompt_for_summary(stdscr, ticket):
@@ -519,6 +530,28 @@ def open_in_browser(ticket_key):
     webbrowser.open(f"https://go/jira/{ticket_key}")
 
 
+def format_ticket_links(tickets):
+    """Format tickets as links that can be pasted into Slack."""
+    return "\n".join(
+        f"https://go/jira/{ticket['key']} - {ticket['summary']}"
+        for ticket in tickets
+    )
+
+
+def print_ticket_links(stdscr, tickets):
+    """Print tickets outside curses and wait until the user is done copying."""
+    curses.endwin()
+    output = format_ticket_links(tickets)
+    if output:
+        print(output)
+        print("\nPress Enter to return to triage.", file=sys.stderr)
+        try:
+            input()
+        except (KeyboardInterrupt, EOFError):
+            print()
+    return _restore_curses()
+
+
 def sort_tickets(tickets, sort_field, sort_reverse, columns):
     if not sort_field:
         return tickets
@@ -560,6 +593,15 @@ def assignee_filter_label(assignee_filter):
 
 def assignee_candidates(tickets):
     return [t.get("assignee") for t in tickets]
+
+
+def centered_scroll_offset(cursor, ticket_count, list_height):
+    """Return a scroll offset that centers the cursor when the list can scroll."""
+    if list_height <= 0:
+        return 0
+    max_offset = max(0, ticket_count - list_height)
+    centered_offset = cursor - (list_height - 1) // 2
+    return max(0, min(centered_offset, max_offset))
 
 
 def draw_list(stdscr, tickets, cursor, scroll_offset, mode_config, selected=None, sort_field=None, sort_reverse=False, filter_info=None, pending_rank_key=None):
@@ -653,9 +695,9 @@ def draw_list(stdscr, tickets, cursor, scroll_offset, mode_config, selected=None
     show_assign = "assignee" in columns
     rank_help = " [K/J] move rank  [Enter] save rank  [s/f/r] cancel" if pending_rank_key else " [K/J] move rank  [Enter] save rank" if sort_field == "rank" and not sort_reverse else " [Enter] view"
     if show_assign:
-        help_text = f" [.] select {rank_help}  [e] summary  [E] epic  [m] comment  [a] assign  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [v] browse  [r] refresh  [q] quit"
+        help_text = f" [.] select {rank_help}  [z] center  [e] summary  [E] epic  [m] comment  [a] assign  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [p] share  [v] browse  [r] refresh  [q] quit"
     else:
-        help_text = f" [.] select {rank_help}  [e] summary  [E] epic  [m] comment  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [v] browse  [r] refresh  [q] quit"
+        help_text = f" [.] select {rank_help}  [z] center  [e] summary  [E] epic  [m] comment  [b] backlog  [x] Won't Fix  [d] done  [s] sort  [f] filter  [p] share  [v] browse  [r] refresh  [q] quit"
     stdscr.attron(curses.A_DIM)
     stdscr.addnstr(help_row, 0, help_text.center(width), width - 1)
     stdscr.attroff(curses.A_DIM)
@@ -887,10 +929,14 @@ def start_epic_link_update(ticket, new_epic_key, update_jobs):
 
 
 def start_assignee_update(ticket, username, update_jobs):
-    if not username or username == ticket.get("assignee"):
+    if not username:
         return False
 
-    old_assignee = ticket.get("assignee", "Unassigned")
+    username = UNASSIGNED if is_unassigned(username) else username
+    if username == (ticket.get("assignee") or UNASSIGNED):
+        return False
+
+    old_assignee = ticket.get("assignee") or UNASSIGNED
     ticket["assignee"] = username
     job = {
         "done": False,
@@ -901,7 +947,7 @@ def start_assignee_update(ticket, username, update_jobs):
     }
     thread = threading.Thread(
         target=assign_ticket_async,
-        args=(ticket["key"], username, job),
+        args=(ticket["key"], None if username == UNASSIGNED else username, job),
         daemon=True,
     )
     thread.start()
@@ -1184,7 +1230,7 @@ def show_description_screen(stdscr, tickets, cursor, mode_config, update_jobs):
                 candidates=assignee_candidates(tickets),
             )
             stdscr = _restore_curses()
-            if username:
+            if username is not None:
                 if start_assignee_update(ticket, username, update_jobs):
                     lines = build_detail_lines(
                         ticket,
@@ -1289,6 +1335,7 @@ def curses_main(stdscr, mode_config):
     columns = mode_config.get("columns", DEFAULT_COLUMNS)
     update_jobs = []
     pending_rank_move = None
+    pending_navigation_count = None
 
     while True:
         height, width = stdscr.getmaxyx()
@@ -1326,7 +1373,8 @@ def curses_main(stdscr, mode_config):
             pending_rank_move = None
             continue
 
-        stdscr.timeout(150 if update_jobs else -1)
+        # Give a numeric prefix a short window to receive its navigation key.
+        stdscr.timeout(500 if pending_navigation_count is not None else (150 if update_jobs else -1))
 
         stdscr.clear()
         filter_info = assignee_filter_label(assignee_filter)
@@ -1336,7 +1384,28 @@ def curses_main(stdscr, mode_config):
 
         key = stdscr.getch()
         if key == -1:
+            pending_navigation_count = None
             continue
+
+        if ord("0") <= key <= ord("9"):
+            pending_navigation_count = min(
+                (pending_navigation_count or 0) * 10 + key - ord("0"),
+                max(1, len(display_tickets)),
+            )
+            continue
+
+        if pending_navigation_count is not None:
+            count = pending_navigation_count
+            pending_navigation_count = None
+            if display_tickets and key == ord("g"):
+                cursor = max(0, min(len(display_tickets) - 1, count - 1))
+                continue
+            if display_tickets and key == ord("j"):
+                cursor = min(len(display_tickets) - 1, cursor + count)
+                continue
+            if display_tickets and key == ord("k"):
+                cursor = max(0, cursor - count)
+                continue
 
         if key in (ord("K"), ord("J")):
             if sort_field == "rank" and not sort_reverse and display_tickets:
@@ -1378,6 +1447,11 @@ def curses_main(stdscr, mode_config):
 
         elif key == ord("G"):
             cursor = len(display_tickets) - 1
+
+        elif key == ord("z"):
+            scroll_offset = centered_scroll_offset(
+                cursor, len(display_tickets), list_height
+            )
 
         elif key == ord(" "):
             cursor = min(len(display_tickets) - 1, cursor + list_height)
@@ -1496,7 +1570,7 @@ def curses_main(stdscr, mode_config):
                     candidates=assignee_candidates(tickets),
                 )
                 stdscr = _restore_curses()
-                if username:
+                if username is not None:
                     for t in targets:
                         start_assignee_update(t, username, update_jobs)
                     selected.clear()
@@ -1590,6 +1664,10 @@ def curses_main(stdscr, mode_config):
         elif key == ord("v"):
             if display_tickets:
                 open_in_browser(display_tickets[cursor]["key"])
+
+        elif key == ord("p"):
+            if display_tickets:
+                stdscr = print_ticket_links(stdscr, display_tickets)
 
         elif key == ord("r"):
             tickets = with_status(stdscr, "Refreshing...", lambda: fetch_tickets(mode_config))

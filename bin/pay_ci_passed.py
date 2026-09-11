@@ -12,6 +12,7 @@ import time
 
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta
+from urllib.parse import quote, urlsplit
 
 
 IGNORED_JOB_FAILURES = ["android-ios-kmp"]
@@ -23,11 +24,64 @@ android_kmp_rebuild_thread = None
 # Track if we've already announced "waiting on logs"
 waiting_on_logs_announced = False
 
+# Cache the commit -> build-group lookup so normal polling only refreshes the
+# build group itself instead of repeating the more expensive wildcard query.
+build_group_tokens_cache = {}
+
+# CIBot can take a long time to return an empty result for the wildcard query.
+# Bound that lookup so a missing build does not block the watcher indefinitely.
+cibot_lookup_timeout = 10
+
+# Merge Queue submission IDs are UUIDs. Keep this deliberately narrower than
+# the URL parser below so a commit SHA cannot be mistaken for a submission.
+MERGEQ_SUBMISSION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+MERGEQ_SUBMISSION_URL_RE = re.compile(
+    r"(?:^|/)mergeq/submissions/([^/?#]+)(?:[/?#].*)?$",
+    re.IGNORECASE,
+)
+MERGEQ_SUBMISSION_FAILED_STATUSES = {"ABORTED", "FAILED", "MERGE_FAILED"}
+MERGEQ_SUBMISSION_PASSED_STATUSES = {"MERGED"}
+MERGEQ_SUBMISSION_ACTIVE_STATUSES = {
+    "INIT",
+    "QUEUED",
+    "QUEUED_OB",
+    "IN_BUILD_QUEUE_OB",
+    "IN_TREE_OB",
+    "TESTING_CHANGE",
+    "TESTS_SUCCEEDED",
+    "BYPASS",
+    "QUEUED_MERGE",
+    "REPLICATION_PREPARE",
+    "REPLICATION_PROCEED",
+}
+
+# Submission builds are created after the submission is queued. Keep the
+# tokens we have already seen so a later response cannot make a build vanish
+# from the watcher's view.
+mergeq_submission_build_tokens_cache = {}
+verbose = False
+
 class BuildNotAvailableYet(Exception):
     pass
 
 
 class TransientNetworkError(Exception):
+    pass
+
+
+class MergeQueueSubmissionFailed(Exception):
+    def __init__(self, submission_id, status):
+        self.submission_id = submission_id
+        self.status = status
+        super().__init__(
+            f"Merge Queue submission {submission_id} reached terminal status {status}"
+        )
+
+
+class MergeQueueSubmissionPassed(Exception):
     pass
 
 
@@ -224,33 +278,300 @@ def filter_and_print_jobs(jobs):
     return jobs
 
 
-def handle_git_sha(ref):
+def get_git_repo():
+    """Return the org/repo path from the current checkout's origin remote."""
     result = subprocess.run(
-        ["sc-curl", "-s", f"cibot.corp.stripe.com/user/build_groups?stripe_user=billfinn&limit=50"],
+        ["git", "config", "--get", "remote.origin.url"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        text=True,
     )
-    stdout = result.stdout.decode("utf-8")
+    remote = result.stdout.strip()
+    if result.returncode != 0 or not remote:
+        raise RuntimeError("Could not determine the repository from remote.origin.url")
+
+    if "://" in remote:
+        repo = urlsplit(remote).path.strip("/")
+    else:
+        # SSH remotes use scp syntax: user@host:org/repo.git.
+        repo = remote.split(":", 1)[-1].strip("/")
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if repo.count("/") < 1:
+        raise RuntimeError(f"Could not determine org/repo from origin {remote!r}")
+    return repo
+
+
+def get_build_group_tokens(ref):
+    """Find build groups for a commit, independent of user and branch."""
+    repo = get_git_repo()
+    encoded_ref = quote(ref, safe="")
     try:
-        build_groups = json.loads(stdout)["build_groups"]
-    except Exception as e:
-        print(f"Error reading from json: {e}\n\nstdout:\n{stdout}")
+        result = subprocess.run(
+            [
+                "sc-curl",
+                "-s",
+                "--max-time", str(cibot_lookup_timeout),
+                f"cibot.corp.stripe.com/{repo}/commit/{encoded_ref}/builds?branch=%2A",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=cibot_lookup_timeout + 1,
+        )
+    except subprocess.TimeoutExpired:
+        raise BuildNotAvailableYet()
+    stdout = result.stdout.decode("utf-8")
+    if not stdout.strip():
+        raise BuildNotAvailableYet()
+    try:
+        response = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        if stdout.strip() == "An unexpected error occurred":
+            raise BuildNotAvailableYet()
+        print(f"Error reading build information: {error}\n\nstdout:\n{stdout}")
         if "dial tcp: lookup cibot.corp.stripe.com: no such host" in stdout:
             raise TransientNetworkError()
-        raise e
-    build_groups = [bg for bg in build_groups if bg["commit_id"] == ref]
-    if len(build_groups) == 0:
-        print(f"No build groups matching ${ref}")
+        raise
+
+    builds = response.get("builds", {})
+    if not isinstance(builds, dict):
+        raise RuntimeError("CIBot returned an unexpected build response")
+
+    # The endpoint returns a map keyed by job name, with a null entry for the
+    # aggregate job. Every concrete build carries its parent build-group token.
+    return list(dict.fromkeys(
+        build["build_group"]
+        for build in builds.values()
+        if build and build.get("build_group")
+    ))
+
+
+def get_mergeq_submission_id(ref):
+    """Return a Merge Queue submission ID when ref is an ID or submission URL."""
+    if not isinstance(ref, str):
+        return None
+
+    if MERGEQ_SUBMISSION_ID_RE.fullmatch(ref):
+        return ref
+
+    match = MERGEQ_SUBMISSION_URL_RE.search(ref)
+    if match and MERGEQ_SUBMISSION_ID_RE.fullmatch(match.group(1)):
+        return match.group(1)
+    return None
+
+
+def get_mergeq_submission(submission_id):
+    """Fetch a Merge Queue submission from CIBot."""
+    try:
+        result = subprocess.run(
+            [
+                "sc-curl",
+                "-s",
+                "--max-time", str(cibot_lookup_timeout),
+                f"cibot.corp.stripe.com/api/mergeq/submissions/{quote(submission_id, safe='')}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=cibot_lookup_timeout + 1,
+        )
+    except subprocess.TimeoutExpired:
+        raise TransientNetworkError()
+
+    stdout = result.stdout.decode("utf-8")
+    if not stdout.strip():
+        raise TransientNetworkError()
+    if "dial tcp: lookup cibot.corp.stripe.com: no such host" in stdout:
+        raise TransientNetworkError()
+
+    try:
+        response = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        print(f"Error reading Merge Queue submission: {error}\n\nstdout:\n{stdout}")
+        raise
+
+    # The admin endpoint returns the submission itself. Accept the wrapped
+    # form too, since other CIBot JSON endpoints return {"submission": ...}.
+    submission = response.get("submission", response) if isinstance(response, dict) else None
+    if not isinstance(submission, dict):
+        raise RuntimeError("CIBot returned an unexpected Merge Queue submission response")
+    return submission
+
+
+def get_git_origin():
+    """Return the host portion of the current checkout's origin remote."""
+    result = subprocess.run(
+        ["git", "config", "--get", "remote.origin.url"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    remote = result.stdout.strip()
+    if result.returncode != 0 or not remote:
+        raise RuntimeError("Could not determine the repository from remote.origin.url")
+
+    if "://" in remote:
+        origin = urlsplit(remote).hostname
+    else:
+        origin = remote.split("@", 1)[-1].split(":", 1)[0]
+    if not origin:
+        raise RuntimeError(f"Could not determine the origin host from {remote!r}")
+    return origin
+
+
+def get_current_pr_number():
+    """Return the PR number for the current branch, if one is available."""
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "view", "--json", "number", "--jq", ".number"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return int(value) if value.isdigit() else None
+
+
+def get_mergeq_pr_submissions(origin, owner, repo, pr_number):
+    """Fetch all Merge Queue submissions associated with a pull request."""
+    try:
+        result = subprocess.run(
+            [
+                "sc-curl",
+                "-s",
+                "--max-time", str(cibot_lookup_timeout),
+                "cibot.corp.stripe.com/api/mergeq/submissions/"
+                f"{quote(origin, safe='')}/{quote(owner, safe='')}/"
+                f"{quote(repo, safe='')}/pull/{pr_number}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=cibot_lookup_timeout + 1,
+        )
+    except subprocess.TimeoutExpired:
+        raise TransientNetworkError()
+
+    stdout = result.stdout.decode("utf-8")
+    if not stdout.strip():
+        raise TransientNetworkError()
+    if "dial tcp: lookup cibot.corp.stripe.com: no such host" in stdout:
+        raise TransientNetworkError()
+
+    try:
+        response = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        print(f"Error reading Merge Queue PR submissions: {error}\n\nstdout:\n{stdout}")
+        raise
+
+    submissions = response.get("submissions", []) if isinstance(response, dict) else response
+    if not isinstance(submissions, list):
+        raise RuntimeError("CIBot returned an unexpected Merge Queue PR submissions response")
+    return [submission for submission in submissions if isinstance(submission, dict)]
+
+
+def get_active_mergeq_submission_for_current_pr():
+    """Return the active Merge Queue submission for the current branch's PR."""
+    pr_number = get_current_pr_number()
+    if pr_number is None:
+        return None
+
+    repo = get_git_repo()
+    try:
+        owner, repo_name = repo.split("/", 1)
+        submissions = get_mergeq_pr_submissions(
+            get_git_origin(), owner, repo_name, pr_number
+        )
+    except (RuntimeError, TransientNetworkError, ValueError) as error:
+        if verbose:
+            print(f"[verbose] could not look up Merge Queue submission for PR: {error}")
+        return None
+
+    for submission in submissions:
+        status = str(submission.get("status", "")).upper()
+        submission_id = submission.get("id")
+        if status in MERGEQ_SUBMISSION_ACTIVE_STATUSES and submission_id:
+            return submission_id
+    return None
+
+
+def get_default_ref():
+    """Prefer the current PR's active Merge Queue submission, then HEAD."""
+    submission_id = get_active_mergeq_submission_for_current_pr()
+    if submission_id:
+        print(f"Watching active Merge Queue submission {submission_id}")
+        return submission_id
+
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        .stdout.decode("utf-8")
+        .strip()
+    )
+
+
+def get_mergeq_submission_build_tokens(submission):
+    """Return all build tokens currently associated with a submission."""
+    builds = submission.get("builds", [])
+    if not isinstance(builds, list):
+        raise RuntimeError("CIBot returned an unexpected Merge Queue builds response")
+
+    tokens = []
+    for build in builds:
+        if not isinstance(build, dict):
+            continue
+        token = build.get("build_token") or build.get("buildToken") or build.get("token")
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def handle_mergeq_submission(submission_id):
+    """Return jobs for a Merge Queue submission, or wait for its builds."""
+    submission = get_mergeq_submission(submission_id)
+    status = str(submission.get("status", "STATUS_INVALID")).upper()
+    print(f"Merge Queue submission {submission_id}: {status}")
+
+    if status in MERGEQ_SUBMISSION_FAILED_STATUSES:
+        raise MergeQueueSubmissionFailed(submission_id, status)
+    if status in MERGEQ_SUBMISSION_PASSED_STATUSES:
+        raise MergeQueueSubmissionPassed()
+
+    seen_tokens = mergeq_submission_build_tokens_cache.setdefault(submission_id, [])
+    for token in get_mergeq_submission_build_tokens(submission):
+        if token not in seen_tokens:
+            seen_tokens.append(token)
+
+    if not seen_tokens:
+        if status == "TESTS_SUCCEEDED":
+            raise MergeQueueSubmissionPassed()
         raise BuildNotAvailableYet()
 
-    # Infer the branch by the oldest timestamp
-    oldest_build_group = min(build_groups, key=lambda bg: bg["build_submitted_at"])
-    branch = oldest_build_group["branch"]
-    print(f"Detected branch {branch}")
-    build_groups = [bg for bg in build_groups if bg["branch"] == branch]
+    jobs = []
+    for build_token in seen_tokens:
+        jobs += handle_build(build_token)
+    return jobs
+
+
+def handle_git_sha(ref):
+    build_group_tokens = build_group_tokens_cache.get(ref)
+    if build_group_tokens is None:
+        build_group_tokens = get_build_group_tokens(ref)
+        if len(build_group_tokens) == 0:
+            print(f"No build groups matching {ref}")
+            raise BuildNotAvailableYet()
+        build_group_tokens_cache[ref] = build_group_tokens
+        print(f"Found {len(build_group_tokens)} build group(s) for {ref}")
+
     all_jobs = []
-    for build_group in build_groups:
-        all_jobs += handle_build_group(build_group["token"])
+    for build_group_token in build_group_tokens:
+        all_jobs += handle_build_group(build_group_token)
     return all_jobs
     # result = subprocess.run(
     #     ["pay", "ci:status", "--ref", ref],
@@ -320,28 +641,27 @@ def handle_build(ref):
     if raw_build["job_name"] == "stripe-internal-android-selectivity":
         commit_sha = raw_build.get("git_commit_sha")
         if commit_sha:
-            bg_result = subprocess.run(
-                ["sc-curl", "-s", f"cibot.corp.stripe.com/user/build_groups?stripe_user=billfinn&limit=50"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-            bg_stdout = bg_result.stdout.decode("utf-8")
             try:
-                all_bgs = json.loads(bg_stdout)["build_groups"]
-                matching_bgs = [bg for bg in all_bgs if bg["commit_id"] == commit_sha]
                 # Find which build group contains this build
-                for bg in matching_bgs:
+                for build_group_token in get_build_group_tokens(commit_sha):
                     bg_builds_result = subprocess.run(
-                        ["sc-curl", "-s", f"cibot.corp.stripe.com/api/build_groups/{bg['token']}"],
+                        [
+                            "sc-curl",
+                            "-s",
+                            f"cibot.corp.stripe.com/api/build_groups/{build_group_token}",
+                        ],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                     )
                     bg_builds = json.loads(bg_builds_result.stdout.decode("utf-8"))["builds"]
                     build_tokens = [b["token"] for b in bg_builds]
                     if verbose:
-                        print(f"[verbose] bg {bg['token']} has builds: {build_tokens}")
+                        print(f"[verbose] bg {build_group_token} has builds: {build_tokens}")
                     if ref in build_tokens:
-                        print(f"[selectivity] Build {ref} is a selectivity job, watching build group {bg['token']} instead.")
+                        print(
+                            f"[selectivity] Build {ref} is a selectivity job, "
+                            f"watching build group {build_group_token} instead."
+                        )
                         return [convert_build_to_job(time.time(), b) for b in bg_builds]
             except Exception as e:
                 if verbose:
@@ -375,8 +695,11 @@ def handle_build_group(ref):
 def main(ref, force_wait):
     global android_kmp_rebuild_triggered, android_kmp_rebuild_thread, waiting_on_logs_announced
 
+    mergeq_submission_id = get_mergeq_submission_id(ref)
     try:
-        if ref.startswith("bg_"):
+        if mergeq_submission_id:
+            jobs = handle_mergeq_submission(mergeq_submission_id)
+        elif ref.startswith("bg_"):
             jobs = handle_build_group(ref)
         elif ref.startswith("bui_"):
             jobs = handle_build(ref)
@@ -384,10 +707,19 @@ def main(ref, force_wait):
             jobs = handle_git_sha(ref)
     except BuildNotAvailableYet:
         print("Build not available yet")
-        return
+        if mergeq_submission_id:
+            return "mergeq_submission_not_ready"
+        return "build_not_available"
     except TransientNetworkError:
         print("Transient network error")
         return
+    except MergeQueueSubmissionFailed as error:
+        print(str(error))
+        notify_failed()
+        sys.exit(1)
+    except MergeQueueSubmissionPassed:
+        notify_passed()
+        sys.exit(1)
 
     jobs = filter_and_print_jobs(jobs)
     unique_jobs = list(set([j["Job"] for j in jobs]))
@@ -481,42 +813,76 @@ def main(ref, force_wait):
         sys.exit(1)
 
 
-# TODO: Support forcibly waiting if we know one job failed but we want to see
-# the results of the other jobs.
-parser = argparse.ArgumentParser(description="Watch CI for a passing build.")
-parser.add_argument("ref", type=str, nargs="?", help="Git commit hash to watch")
-# Optional positional argument
-parser.add_argument(
-    "--force_wait", action="store_true", help="If true, forcibly waits."
-)
-parser.add_argument(
-    "--verbose", "-v", action="store_true", help="Enable verbose debug logging."
-)
-args = parser.parse_args()
-if args.ref is None:
-    ref = (
-        subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+def run():
+    # TODO: Support forcibly waiting if we know one job failed but we want to
+    # see the results of the other jobs.
+    global verbose, cibot_lookup_timeout
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Watch CI for a passing build. With no ref, prefer the active "
+            "Merge Queue submission for the current PR, then fall back to HEAD."
         )
-        .stdout.decode("utf-8")
-        .strip()
     )
-else:
-    ref = args.ref
+    parser.add_argument(
+        "ref",
+        type=str,
+        nargs="?",
+        help="Git commit hash, build token/group, or Merge Queue submission ID/URL to watch",
+    )
+    parser.add_argument(
+        "--force_wait", action="store_true", help="If true, forcibly waits."
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Enable verbose debug logging."
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=30,
+        metavar="SECONDS",
+        help="Seconds between normal status polls (default: 30).",
+    )
+    parser.add_argument(
+        "--lookup-timeout",
+        type=int,
+        default=10,
+        metavar="SECONDS",
+        help="Maximum seconds to wait for CIBot lookups (default: 10).",
+    )
+    args = parser.parse_args()
 
-force_wait = args.force_wait
-verbose = args.verbose
+    force_wait = args.force_wait
+    verbose = args.verbose
+    poll_interval = max(args.interval, 1)
+    cibot_lookup_timeout = max(args.lookup_timeout, 1)
 
-while True:
-    print(f"{datetime.now()} running ...")
-    result = main(ref, force_wait)
-    seconds = 10 if result == "waiting_on_logs" else 30
-    while seconds > 0:
-        mins, secs = divmod(seconds, 60)
-        timer = f"{mins:02d}:{secs:02d}"
-        sys.stdout.write(f"\r{timer}")  # \r moves cursor to beginning of line
-        sys.stdout.flush()  # Ensures immediate display
-        time.sleep(1)
-        seconds -= 1
+    if args.ref is None:
+        ref = get_default_ref()
+    else:
+        ref = args.ref
+
+    while True:
+        print(f"{datetime.now()} running ...")
+        result = main(ref, force_wait)
+        if result == "mergeq_submission_not_ready":
+            seconds = 30
+        elif result == "build_not_available":
+            seconds = 5
+        elif result == "waiting_on_logs":
+            seconds = 10
+        else:
+            seconds = poll_interval
+        while seconds > 0:
+            mins, secs = divmod(seconds, 60)
+            timer = f"{mins:02d}:{secs:02d}"
+            sys.stdout.write(f"\r{timer}")  # \r moves cursor to beginning of line
+            sys.stdout.flush()  # Ensures immediate display
+            time.sleep(1)
+            seconds -= 1
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    run()

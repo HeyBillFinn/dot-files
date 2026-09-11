@@ -3,7 +3,7 @@
 # Local changes pin Playwright and adapt its current session syntax.
 set -euo pipefail
 
-VERSION="0.7.4-dotfiles.1"
+VERSION="0.7.4-dotfiles.2"
 
 usage() {
   cat <<'USAGE'
@@ -532,15 +532,22 @@ else
     echo "$ref"
   }
 
+  # GitHub pages can contain several textareas (for example, review replies
+  # and the main issue/PR comment form). The attachment component updates the
+  # main comment field, so do not use an unscoped `textarea` selector here.
+  # Keep the final fallback for older GHE layouts that lack the stable field
+  # name/id.
+  gha_comment_textarea_expression="document.querySelector('textarea[name=\"comment[body]\"]') || document.querySelector('#new_comment_field') || document.querySelector('textarea')"
+
   _gha_textarea_value() {
     "${pw_cli[@]}" eval \
-      "() => { const ta = document.querySelector('textarea'); return ta ? ta.value : ''; }" \
+      "() => { const ta = ${gha_comment_textarea_expression}; return ta ? ta.value : ''; }" \
       2>&1 | grep -A1 '### Result' | tail -1 | sed 's/^"//; s/"$//'
   }
 
   _gha_clear_textarea() {
     "${pw_cli[@]}" eval \
-      "() => { const ta = document.querySelector('textarea'); if (ta) { ta.value = ''; ta.dispatchEvent(new Event('input', {bubbles:true})); } }" \
+      "() => { const ta = ${gha_comment_textarea_expression}; if (ta) { ta.value = ''; ta.dispatchEvent(new Event('input', {bubbles:true})); } }" \
       >/dev/null 2>&1 || true
   }
 

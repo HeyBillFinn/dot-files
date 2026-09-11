@@ -60,6 +60,34 @@ def get_deploy_plan(plan_id: str, verbose: bool = False) -> dict:
     return response["deployPlan"]
 
 
+def get_device_types(deploy_group: dict) -> list:
+    """Read compatible device types, falling back to the deprecated field."""
+    compatible_device_types = deploy_group.get("compatibleDeviceTypes", [])
+    if compatible_device_types:
+        return compatible_device_types
+
+    legacy_device_type = deploy_group.get("hardwareType")
+    if legacy_device_type:
+        return [legacy_device_type]
+    return []
+
+
+def device_type_keys(device_types: list) -> set[str]:
+    return {
+        json.dumps(device_type, sort_keys=True, separators=(",", ":"))
+        for device_type in device_types
+    }
+
+
+def format_device_types(device_types: list) -> str:
+    if not device_types:
+        return "(none reported)"
+    return ", ".join(
+        json.dumps(device_type, sort_keys=True, separators=(",", ":"))
+        for device_type in device_types
+    )
+
+
 def get_managed_assets(deploy_group: dict) -> list[dict]:
     """Extract managed asset versions from a deploy group's details."""
     assets = deploy_group.get("managedAssets", [])
@@ -75,10 +103,12 @@ def get_managed_assets(deploy_group: dict) -> list[dict]:
 
 
 def create_deploy_plan(target_ddg_id: str, name: str, asset_version_ids: list[str],
+                       description: str,
                        verbose: bool = False) -> str:
     response = run_grpcurl("CreateProgressiveDeployPlan", {
         "deploy_group_id": target_ddg_id,
         "name": name,
+        "description": description,
         "asset_version_ids_to_install": asset_version_ids,
         "rollout_plan": [0, 100],
         "mandatory_install_datetime": {"millis": "0"},
@@ -132,6 +162,21 @@ def main():
         source_name = source_plan.get("name", source)
         print(source_name)
 
+        source_group_id = source_plan.get("deployGroupId", "")
+        if not source_group_id:
+            print(
+                "\nError: source deploy plan does not identify its owning deploy group.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"Fetching source deploy group...", end=" ", flush=True)
+        try:
+            source_group = get_deploy_group_details(source_group_id, verbose=verbose)
+        except Exception as e:
+            print(f"\nError fetching source group: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(source_group.get("name", source_group_id))
+
         asset_version_ids = source_plan.get("assetVersionIdsToInstall", [])
         if not asset_version_ids:
             print(f"\nError: source plan has no asset versions to install.", file=sys.stderr)
@@ -147,7 +192,14 @@ def main():
     target_name = target_group.get("name", target_ddg)
     print(target_name)
 
+    source_device_types = get_device_types(source_group)
+    target_device_types = get_device_types(target_group)
+    device_types_differ = (
+        device_type_keys(source_device_types) != device_type_keys(target_device_types)
+    )
+
     plan_name = f"Copy of {source_name}"
+    plan_description = f"Copied asset versions from {source_name}"
 
     print()
     print("=" * 62)
@@ -158,7 +210,14 @@ def main():
     print(f"  Target:  {target_name}")
     print(f"           {AMP_DDG_URL.format(target_ddg)}")
     print(f"  Name:    {plan_name}")
+    print(f"  Description: {plan_description}")
     print(f"  Update:  FORCE_IMMEDIATE")
+    print(f"  Source device types: {format_device_types(source_device_types)}")
+    print(f"  Target device types: {format_device_types(target_device_types)}")
+    if device_types_differ:
+        print()
+        print("  WARNING: Source and target deploy groups have different device types.")
+        print("  The target may reject asset versions that are not compatible with its devices.")
     print()
     print(f"  Asset versions ({len(managed_assets)}):")
     for asset in managed_assets:
@@ -171,7 +230,12 @@ def main():
     print(f"  Target:  {target_name} ({target_ddg})")
     print()
 
-    answer = input("  Proceed? [y/N] ").strip().lower()
+    prompt = (
+        "  Proceed despite the device-type mismatch? [y/N] "
+        if device_types_differ
+        else "  Proceed? [y/N] "
+    )
+    answer = input(prompt).strip().lower()
     if answer != "y":
         print("  Aborted.")
         sys.exit(0)
@@ -179,7 +243,13 @@ def main():
     print()
     print(f"-> Creating deploy plan on {target_name}...")
     try:
-        plan_id = create_deploy_plan(target_ddg, plan_name, asset_version_ids, verbose=verbose)
+        plan_id = create_deploy_plan(
+            target_ddg,
+            plan_name,
+            asset_version_ids,
+            plan_description,
+            verbose=verbose,
+        )
         plan_url = AMP_DEPLOY_PLAN_URL.format(plan_id)
         print(f"   Created: {plan_id}")
         print(f"   {plan_url}")

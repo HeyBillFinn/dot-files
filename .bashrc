@@ -79,7 +79,7 @@ phe()
 mov_to_webm() {
   local width=800
   local speed_filter=""
-  local input=""
+  local -a inputs=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -90,7 +90,7 @@ mov_to_webm() {
         speed_filter=",setpts=PTS/1.5"
         ;;
       -h|--help)
-        echo "Usage: mov_to_webm [--small] [--fast] <input.mov>"
+        echo "Usage: mov_to_webm [--small] [--fast] <input.mov> [input.mov ...]"
         echo "  -s, --small  Scale to 400px wide (default: 800px)"
         echo "  -f, --fast   Speed video up to 1.5x (default: normal speed)"
         return 0
@@ -99,25 +99,85 @@ mov_to_webm() {
         echo "Unknown option: $1" >&2
         return 2
         ;;
+      --)
+        shift
+        inputs+=("$@")
+        break
+        ;;
       *)
-        if [ -n "$input" ]; then
-          echo "Only one input file is supported" >&2
-          return 2
-        fi
-        input="$1"
+        inputs+=("$1")
         ;;
     esac
     shift
   done
 
-  if [ -z "$input" ]; then
-    echo "Usage: mov_to_webm [--small] [--fast] <input.mov>" >&2
+  if [ "${#inputs[@]}" -eq 0 ]; then
+    echo "Usage: mov_to_webm [--small] [--fast] <input.mov> [input.mov ...]" >&2
     return 2
   fi
 
-  ffmpeg -nostats -i "$input" -an \
-    -filter:v "scale=${width}:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2${speed_filter}" \
-    -c:v libvpx-vp9 -crf 23 "$input.webm"
+  local input
+  local status=0
+  for input in "${inputs[@]}"; do
+    ffmpeg -nostats -i "$input" -an \
+      -filter:v "scale=${width}:-1,pad=ceil(iw/2)*2:ceil(ih/2)*2${speed_filter}" \
+      -c:v libvpx-vp9 -crf 23 "$input.webm" || status=$?
+  done
+  return "$status"
+}
+
+mov_to_webm_today() {
+  local prefix="/Users/billfinn/Desktop/Screen Recording $(date +%F)"
+  local -a logs=()
+  local converted=0
+  local skipped=0
+  local failed=0
+
+  local nullglob_was_set=false
+  if shopt -q nullglob; then
+    nullglob_was_set=true
+  else
+    shopt -s nullglob
+  fi
+
+  local -a files=("$prefix"*.mov)
+
+  if [ "$nullglob_was_set" = false ]; then
+    shopt -u nullglob
+  fi
+
+  if [ "${#files[@]}" -eq 0 ]; then
+    logs+=("No matching .mov files found for prefix: $prefix")
+  else
+    local file
+    for file in "${files[@]}"; do
+      [ -f "$file" ] || continue
+      if [ -f "$file.webm" ]; then
+        logs+=("Skipping $file; output already exists: $file.webm")
+        skipped=$((skipped + 1))
+        continue
+      fi
+      if mov_to_webm "$file" >/dev/null 2>&1; then
+        logs+=("Converted: $file")
+        converted=$((converted + 1))
+      else
+        logs+=("Failed: $file")
+        failed=$((failed + 1))
+      fi
+    done
+  fi
+
+  printf '\nmov_to_webm_today summary:\n'
+  if [ "${#logs[@]}" -gt 0 ]; then
+    printf '  %s\n' "${logs[@]}"
+  fi
+  printf '  Converted: %d | Skipped: %d | Failed: %d\n' \
+    "$converted" "$skipped" "$failed"
+
+  if [ "$failed" -gt 0 ]; then
+    return 1
+  fi
+  return 0
 }
 
 mov_to_webm_and_upload() {
@@ -489,6 +549,14 @@ default_branch() {
 _set_android_serial() {
   export ANDROID_SERIAL="$1"
   echo "ANDROID_SERIAL=${ANDROID_SERIAL} (${2})"
+}
+
+setandroidserial() {
+  if [ "$#" -ne 1 ]; then
+    echo "Usage: setandroidserial <serial>"
+    return 1
+  fi
+  _set_android_serial "$1" "custom"
 }
 
 setandroidserials710() {
@@ -1261,6 +1329,7 @@ gh_enable_auto_merge()
 }
 
 alias gh_merge_pr='gh pr merge -m -d'
+alias gru='pay gru review --repo stripe-internal/android --base master --all-rules --prompt-dir /Users/billfinn/stripe/mint/pay-server/cibot/llm/prompts/assets/open_ended_review'
 
 gh_image_upload_cleanup() {
   if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--force" ]; }; then
@@ -1500,7 +1569,8 @@ gh_image_upload() (
     fi
     if ! url=$(bash "$uploader" "${uploader_args[@]}"); then
       echo "gh_image_upload: upload failed for $attachment." >&2
-      echo "Run gh_image_upload_login to establish or renew the GitHub SSO session." >&2
+      echo "gh_image_upload: check the gh-attach error above; the browser may have uploaded the file without returning a URL." >&2
+      echo "If Chrome is showing a GitHub SSO/login page, run gh_image_upload_login." >&2
       return 1
     fi
     _gh_image_upload_log "uploaded $attachment_index/${#attachments[@]}: $url"
@@ -1544,8 +1614,11 @@ gh_edit_pr_desc() {
     return 1
   }
 
-  if ! gh pr view ${pr:+"$pr"} --json title,body \
-      --jq '.title + "\n\n" + (.body // "")' > "$edit_file"; then
+  if ! gh pr view ${pr:+"$pr"} --json title,body,files \
+      --jq '(.title // "") + "\n\n" + (.body // "") + "\n\n" +
+        "<!-- gh_edit_pr_desc: files changed; do not edit below this line -->\n<!--\nFiles changed in this PR:\n" +
+        ((.files // []) | map("- " + (.path // "")) | join("\n")) +
+        "\n-->"' > "$edit_file"; then
     rm -f "$edit_file" "$body_file"
     return 1
   fi
@@ -1564,7 +1637,10 @@ gh_edit_pr_desc() {
     echo "The first line must be a title followed by a blank line; PR was not updated." >&2
     return 1
   fi
-  tail -n +3 "$edit_file" > "$body_file"
+  # The generated file list is useful while editing but should not become part
+  # of the PR description. Everything from this marker to the end is removed.
+  awk 'index($0, "<!-- gh_edit_pr_desc: files changed; do not edit below this line -->") == 1 { exit } { print }' \
+    <(tail -n +3 "$edit_file") > "$body_file"
 
   if ! gh pr edit ${pr:+"$pr"} --body-file "$body_file"; then
     rm -f "$edit_file" "$body_file"
@@ -1583,13 +1659,24 @@ gh_edit_pr_desc() {
 }
 
 gh_view_pr() {
-  if gh pr view --web 2>/dev/null; then
+  local host
+  host=$(gh_hostname)
+  if [ -z "$host" ]; then
+    echo "gh_view_pr: could not determine the GitHub host from the origin remote." >&2
+    return 1
+  fi
+
+  if GH_HOST="$host" gh pr view --web 2>/dev/null; then
     return
   fi
   local branch
   branch=$(git branch --show-current)
   local repo_url
-  repo_url=$(gh browse -n)
+  repo_url=$(GH_HOST="$host" gh browse -n) || return 1
+  if [ -z "$repo_url" ]; then
+    echo "gh_view_pr: could not determine the repository URL." >&2
+    return 1
+  fi
   open "${repo_url}/compare/${branch}?expand=1"
 }
 
@@ -1760,11 +1847,148 @@ parse_git_branch() {
   git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ (\1)/'
 }
 
+_bash_prompt_pr_status() {
+  local state="$1"
+  local url="$2"
+  local number="$3"
+  local color=90
+  local label='<no PR>'
+
+  if [ -n "$number" ] && [ -n "$url" ]; then
+    case "$state" in
+      OPEN) color=36 ;;
+      CLOSED|MERGED) color=31 ;;
+    esac
+  elif [ "$state" = NO_GIT ]; then
+    label='<no git>'
+  fi
+
+  printf '\001\033[%sm\002' "$color"
+  if [ -n "$number" ] && [ -n "$url" ]; then
+    printf '\001\033]8;;%s\a\002PR #%s\001\033]8;;\a\002' "$url" "$number"
+  else
+    printf '%s' "$label"
+  fi
+  printf '\001\033[39m\002'
+}
+
+parse_git_pr() {
+  local branch repo_root cache_dir cache_file cache_key now
+  local cache_ttl failure_cache_ttl cached_ttl
+  local cached_at cached_number cached_url cached_state cached_status
+  local cache_line cache_value
+  local host lookup_succeeded pr_info pr_number pr_url pr_state
+
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    _bash_prompt_pr_status NO_GIT
+    return 0
+  }
+  branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || {
+    _bash_prompt_pr_status NONE
+    return 0
+  }
+  case "$branch" in
+    main|master)
+      _bash_prompt_pr_status NONE
+      return 0
+      ;;
+  esac
+
+  cache_dir="${TMPDIR:-/tmp}/bash-pr-prompt"
+  if [ ! -d "$cache_dir" ]; then
+    mkdir -p "$cache_dir" 2>/dev/null || return 0
+  fi
+
+  # cksum keeps branch names and repository paths out of the cache filename.
+  cache_key=$(printf '%s\0%s' "$repo_root" "$branch" | cksum 2>/dev/null)
+  cache_key=${cache_key%% *}
+  [ -n "$cache_key" ] || return 0
+  cache_file="$cache_dir/$cache_key"
+  now=$(date +%s 2>/dev/null) || return 0
+  cache_ttl="${BASH_PR_PROMPT_CACHE_TTL:-300}"
+  [[ "$cache_ttl" =~ ^[0-9]+$ ]] || cache_ttl=300
+  failure_cache_ttl="${BASH_PR_PROMPT_FAILURE_CACHE_TTL:-15}"
+  [[ "$failure_cache_ttl" =~ ^[0-9]+$ ]] || failure_cache_ttl=15
+
+  if [ -r "$cache_file" ]; then
+    cached_at=""
+    cached_number=""
+    cached_url=""
+    cached_state=""
+    cached_status=""
+    cache_line=0
+    while IFS= read -r cache_value || [ -n "$cache_value" ]; do
+      cache_line=$((cache_line + 1))
+      case "$cache_line" in
+        1) cached_at="$cache_value" ;;
+        2) cached_number="$cache_value" ;;
+        3) cached_url="$cache_value" ;;
+        4)
+          # Before PR state was cached, line 4 contained the lookup status.
+          case "$cache_value" in
+            ok|failure) cached_status="$cache_value" ;;
+            *) cached_state="$cache_value" ;;
+          esac
+          ;;
+        5) cached_status="$cache_value" ;;
+      esac
+    done < "$cache_file"
+
+    cached_ttl="$cache_ttl"
+    [ "$cached_status" = failure ] && cached_ttl="$failure_cache_ttl"
+    if [[ "$cached_at" =~ ^[0-9]+$ ]] &&
+      (( now >= cached_at && now - cached_at < cached_ttl )); then
+      _bash_prompt_pr_status "${cached_state:-OPEN}" "$cached_url" "$cached_number"
+      return 0
+    fi
+  fi
+
+  # gh_hostname is already defined above and handles both SSH and HTTPS remotes.
+  host=$(gh_hostname 2>/dev/null)
+  lookup_succeeded=0
+  if [ -n "$host" ]; then
+    if pr_info=$(GH_HOST="$host" gh pr list --head "$branch" --state all \
+      --limit 100 --json number,url,state \
+      --jq 'if length == 0 then "" else (map(select(.state == "OPEN")) + map(select(.state != "OPEN"))) | .[0] | "\(.number)\t\(.url)\t\(.state)" end' \
+      2>/dev/null); then
+      lookup_succeeded=1
+    fi
+  else
+    if pr_info=$(gh pr list --head "$branch" --state all --limit 100 \
+      --json number,url,state \
+      --jq 'if length == 0 then "" else (map(select(.state == "OPEN")) + map(select(.state != "OPEN"))) | .[0] | "\(.number)\t\(.url)\t\(.state)" end' \
+      2>/dev/null); then
+      lookup_succeeded=1
+    fi
+  fi
+
+  IFS=$'\t' read -r pr_number pr_url pr_state <<< "$pr_info"
+  # A failed refresh may be a temporary network/authentication problem. Keep
+  # showing a previously known PR rather than replacing it with a false miss.
+  if [ "$lookup_succeeded" -eq 0 ] &&
+    [ -n "$cached_number" ] && [ -n "$cached_url" ]; then
+    pr_number="$cached_number"
+    pr_url="$cached_url"
+    pr_state="${cached_state:-OPEN}"
+  fi
+  # Cache successful lookups and genuine misses for the normal TTL. Retry
+  # failed lookups sooner so a transient proxy/authentication problem cannot
+  # hide a PR for the full normal TTL.
+  if [ "$lookup_succeeded" -eq 0 ]; then
+    cache_status=failure
+  else
+    cache_status=ok
+  fi
+  printf '%s\n%s\n%s\n%s\n%s\n' "$now" "$pr_number" "$pr_url" "$pr_state" "$cache_status" > "$cache_file" 2>/dev/null || return 0
+
+  _bash_prompt_pr_status "${pr_state:-NONE}" "$pr_url" "$pr_number"
+}
+
 rmgradlecache() {
   find ~/.gradle/caches/ -name "*stripe*$1" -exec rm -rvf {} \;
 }
 
-export PS1="\u@\h \[\033[32m\]\w\[\033[33m\]\$(parse_git_branch)\[\033[00m\] $ "
+export PS1="\[\033[32m\]\w\[\033[33m\]\$(parse_git_branch) \$(parse_git_pr)\[\033[00m\] $ "
 # alias notify'osascript -e '"'"'display notification "hello world!"'"'"'
 
 wb() {
@@ -2163,15 +2387,144 @@ curlreaderregister() {
 }
 
 curllocationscreate() {
-  local date_part
-  date_part=$(date +%Y%m%d)
-  local unique_id
-  unique_id=$(printf "%05d" $(( $(date +%s) % 100000 )))
-  curl_output=$(curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/terminal/locations -u "$SECRET_KEY": -d display_name="$date_part-$unique_id test location" -d "address[line1]"="354 Oyster Point Blvd" -d "address[city]"="South San Francisco" -d "address[state]"="CA" -d "address[country]"="US" -d "address[postal_code]"="94080")
+  # Optional arguments are country and display name. With no arguments this
+  # retains the original US location behavior.
+  local country="${1:-US}"
+  local display_name="${2:-}"
+  local address_line1
+  local address_city
+  local address_state
+  local address_postal_code
+
+  case "$country" in
+    US|us)
+      country=US
+      address_line1="354 Oyster Point Blvd"
+      address_city="South San Francisco"
+      address_state="CA"
+      address_postal_code="94080"
+      ;;
+    CA|ca)
+      country=CA
+      address_line1="100 King Street West"
+      address_city="Toronto"
+      address_state="ON"
+      address_postal_code="M5X 1C9"
+      ;;
+    GB|gb)
+      country=GB
+      address_line1="10 Downing Street"
+      address_city="London"
+      address_state=""
+      address_postal_code="SW1A 2AA"
+      ;;
+    *)
+      echo "Unsupported country '$country'. Supported countries: US, CA, GB." >&2
+      return 2
+      ;;
+  esac
+
+  if [ -z "$display_name" ]; then
+    local date_part
+    local unique_id
+    date_part=$(date +%Y%m%d)
+    unique_id=$(printf '%05d' "$(( $(date +%s) % 100000 ))")
+    display_name="$date_part-$unique_id test location"
+  fi
+
+  local -a curl_args
+  curl_args=(-s https://api.stripe.com/v1/terminal/locations -u "$SECRET_KEY:" \
+    -d "display_name=$display_name" \
+    -d "address[line1]=$address_line1" \
+    -d "address[city]=$address_city" \
+    -d "address[country]=$country" \
+    -d "address[postal_code]=$address_postal_code")
+  if [ -n "$address_state" ]; then
+    curl_args+=(-d "address[state]=$address_state")
+  fi
+  if [ -n "${STRIPE_ACCOUNT_HEADER:-}" ]; then
+    curl_args+=(-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER")
+  fi
+  local curl_status
+  if curl_output=$(curl "${curl_args[@]}"); then
+    :
+  else
+    curl_status=$?
+    echo "$curl_output"
+    return "$curl_status"
+  fi
   echo "$curl_output"
-  LOCATION_ID=$(echo "$curl_output" | jq -r -c .id)
+  if ! LOCATION_ID=$(printf '%s\n' "$curl_output" | jq -r -c '.id // empty'); then
+    echo "Could not parse the location response." >&2
+    return 1
+  fi
+  if [ -z "$LOCATION_ID" ]; then
+    echo "Location creation failed: response did not contain an id." >&2
+    return 1
+  fi
   export LOCATION_ID
   echo "Setting location ID: $LOCATION_ID"
+}
+
+# Create multiple locations with the same valid address and unique display names.
+curllocationscreatemany() {
+  if [ "$#" -ne 2 ]; then
+    echo "Usage: curllocationscreatemany <US|CA|GB> <count>" >&2
+    return 2
+  fi
+
+  local country
+  country=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+  case "$country" in
+    US|CA|GB) ;;
+    *)
+      echo "Unsupported country '$1'. Supported countries: US, CA, GB." >&2
+      return 2
+      ;;
+  esac
+
+  case "$2" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|1000) ;;
+    *)
+      echo "Count must be a positive integer no greater than 1000." >&2
+      return 2
+      ;;
+  esac
+
+  local count="$2"
+  local date_part
+  date_part="$(date +%Y-%m-%d)"
+  local -a used_suffixes=()
+  local suffix
+  local used_suffix
+  local suffix_in_use
+  local unique_prefix
+  unique_prefix="$date_part"
+  local i
+  local display_name
+  for ((i = 1; i <= count; i++)); do
+    while :; do
+      suffix=$(printf '%03d' "$((RANDOM % 1000))")
+      suffix_in_use=0
+      for used_suffix in "${used_suffixes[@]}"; do
+        if [ "$used_suffix" = "$suffix" ]; then
+          suffix_in_use=1
+          break
+        fi
+      done
+      if [ "$suffix_in_use" -eq 0 ]; then
+        used_suffixes+=("$suffix")
+        break
+      fi
+    done
+
+    display_name="${unique_prefix}-${suffix}"
+    echo "Creating location $i/$count: $display_name"
+    if ! curllocationscreate "$country" "$display_name"; then
+      echo "Failed to create location $i/$count." >&2
+      return 1
+    fi
+  done
 }
 
 curllocationsdelete() {
@@ -2180,6 +2533,90 @@ curllocationsdelete() {
   else
     curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} -X DELETE "https://api.stripe.com/v1/terminal/locations/$1" -u "$SECRET_KEY":
   fi
+}
+
+curllocationsdeletemany() {
+  if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+    echo "Usage: curllocationsdeletemany <display-name-prefix>" >&2
+    return 2
+  fi
+
+  local prefix="$1"
+  local -a curl_args
+  curl_args=(-s "https://api.stripe.com/v1/terminal/locations?limit=100" -u "$SECRET_KEY:")
+  if [ -n "${STRIPE_ACCOUNT_HEADER:-}" ]; then
+    curl_args+=(-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER")
+  fi
+
+  local locations_output
+  local curl_status
+  if locations_output=$(curl "${curl_args[@]}"); then
+    :
+  else
+    curl_status=$?
+    echo "$locations_output"
+    return "$curl_status"
+  fi
+
+  if ! printf '%s\n' "$locations_output" | jq -e '(.data | type) == "array"' >/dev/null; then
+    echo "$locations_output"
+    echo "Could not parse the locations response." >&2
+    return 1
+  fi
+
+  local matched=0
+  local deleted=0
+  local skipped=0
+  local failed=0
+  local location_id
+  local display_name
+  local address
+  local confirmation
+  while IFS=$'\t' read -r location_id display_name address; do
+    [ -z "$location_id" ] && continue
+    matched=$((matched + 1))
+    printf '\nLocation: %s\nID: %s\nAddress: %s\n' \
+      "$display_name" "$location_id" "$address"
+    if ! read -r -p "Delete this location? [y/N] " confirmation <&3; then
+      confirmation=""
+    fi
+    case "$confirmation" in
+      y|Y|yes|Yes|YES)
+        if curllocationsdelete "$location_id"; then
+          deleted=$((deleted + 1))
+          echo "Deleted $location_id."
+        else
+          failed=$((failed + 1))
+          echo "Failed to delete $location_id." >&2
+        fi
+        ;;
+      *)
+        skipped=$((skipped + 1))
+        echo "Skipped $location_id."
+        ;;
+    esac
+  done 3<&0 < <(
+    printf '%s\n' "$locations_output" | jq -r --arg prefix "$prefix" '
+      .data[]
+      | select((.display_name // "") | startswith($prefix))
+      | [
+          (.id // ""),
+          (.display_name // ""),
+          ([.address.line1, .address.city, .address.state, .address.postal_code, .address.country]
+            | map(select(. != null and . != ""))
+            | join(", "))
+        ]
+      | @tsv
+    '
+  )
+
+  if [ "$matched" -eq 0 ]; then
+    echo "No locations found with display name prefix '$prefix'."
+    return 0
+  fi
+
+  echo "Processed $matched matching location(s): deleted $deleted, skipped $skipped, failed $failed."
+  [ "$failed" -eq 0 ]
 }
 
 alias curllocationsclearconfigoverride='curl -s ${STRIPE_ACCOUNT_HEADER:+-H "Stripe-Account: $STRIPE_ACCOUNT_HEADER"} https://api.stripe.com/v1/terminal/locations/$LOCATION_ID -u "$SECRET_KEY": -d configuration_overrides='
@@ -2690,6 +3127,7 @@ alias standalonereinstall='type standalonereinstall; adb install -d ./standalone
 
 alias terminalandroidassemble='type terminalandroidassemble; ./gradlew --configuration-cache :standalonepos:android:assembleDebug ; saydone'
 alias terminalandroidreinstall='type terminalandroidreinstall; adb install -d ./standalonepos/android/build/outputs/apk/debug/android-debug.apk && terminalandroidappstart; saydone'
+alias terminalandroidbuild='terminalandroidassemble && terminalandroidreinstall'
 alias terminalandroidappstart='type terminalandroidappstart; adb shell am start -n com.stripe.standalonepos.android.debug/com.stripe.standalone.android.MainActivity'
 
 alias readerbuildapp='type readerbuildapp; ./gradlew --configuration-cache :terminalapp:application:installHandoff; adb shell am start -n com.stripe.terminal.testapp/.MainActivity; saydone installing app'
@@ -2749,14 +3187,86 @@ alias glstag='git log --tags --simplify-by-decoration --pretty="format:%ci %d" |
 alias gamend='git commit --no-verify --amend --no-edit'
 # alias gm='git checkout master'
 alias gfo='git fetch origin && [ `git rev-parse --abbrev-ref HEAD` == $(default_branch) ] && gmr || git fetch . origin/$(default_branch):$(default_branch)'
-gfor() {
-  local branch remote merge_ref upstream_ref
-  branch=$(git symbolic-ref --quiet --short HEAD) || return 1
-  remote=$(git config --get "branch.$branch.remote") || return 1
-  merge_ref=$(git config --get "branch.$branch.merge") || return 1
-  upstream_ref=$(git rev-parse --symbolic-full-name '@{u}') || return 1
 
-  git fetch "$remote" "+$merge_ref:$upstream_ref" && git reset --hard '@{u}'
+_gfor_failure() {
+  local step=$1 exit_code=$2 suggested_remote
+
+  printf "gfor: %s failed (exit code %d).\n" "$step" "$exit_code" >&2
+  printf "gfor: cwd: %s\n" "$PWD" >&2
+  printf "gfor: repository: %s\n" \
+    "$(git rev-parse --show-toplevel 2>/dev/null || printf '<not a git repository>')" >&2
+  printf "gfor: branch: %s\n" "${branch:-<unknown>}" >&2
+  printf "gfor: remote: %s\n" "${remote:-<unknown>}" >&2
+  printf "gfor: merge ref: %s\n" "${merge_ref:-<unknown>}" >&2
+  printf "gfor: upstream: %s\n" "${upstream_ref:-<unknown>}" >&2
+  printf "gfor: configured remotes:\n" >&2
+  git remote -v 2>&1 | sed 's/^/  /' >&2
+  if [ "$step" = "reading branch.$branch.remote" ]; then
+    suggested_remote=$(git remote | head -n 1)
+    printf "gfor: branch '%s' has no upstream configuration.\n" "$branch" >&2
+    if [ -n "$suggested_remote" ]; then
+      printf "gfor: if the remote branch exists, run:\n" >&2
+      printf "  git branch --set-upstream-to='%s/%s' '%s'\n" \
+        "$suggested_remote" "$branch" "$branch" >&2
+      printf "gfor: otherwise publish this branch with:\n" >&2
+      printf "  git push --set-upstream '%s' HEAD\n" "$suggested_remote" >&2
+    fi
+  fi
+  printf "gfor: status:\n" >&2
+  git status --short --branch 2>&1 | sed 's/^/  /' >&2
+  return "$exit_code"
+}
+
+gfor() {
+  local branch remote merge_ref upstream_ref exit_code
+
+  if branch=$(git symbolic-ref --quiet --short HEAD); then
+    :
+  else
+    exit_code=$?
+    _gfor_failure "determining the current branch" "$exit_code"
+    return "$?"
+  fi
+
+  if remote=$(git config --get "branch.$branch.remote"); then
+    :
+  else
+    exit_code=$?
+    _gfor_failure "reading branch.$branch.remote" "$exit_code"
+    return "$?"
+  fi
+
+  if merge_ref=$(git config --get "branch.$branch.merge"); then
+    :
+  else
+    exit_code=$?
+    _gfor_failure "reading branch.$branch.merge" "$exit_code"
+    return "$?"
+  fi
+
+  if upstream_ref=$(git rev-parse --symbolic-full-name '@{u}'); then
+    :
+  else
+    exit_code=$?
+    _gfor_failure "resolving the upstream branch" "$exit_code"
+    return "$?"
+  fi
+
+  if git fetch "$remote" "+$merge_ref:$upstream_ref"; then
+    :
+  else
+    exit_code=$?
+    _gfor_failure "fetching $merge_ref from $remote" "$exit_code"
+    return "$?"
+  fi
+
+  if git reset --hard '@{u}'; then
+    :
+  else
+    exit_code=$?
+    _gfor_failure "resetting to $upstream_ref" "$exit_code"
+    return "$?"
+  fi
 }
 alias gmr='git merge --ff-only @{u}'
 alias gmain='git checkout $(default_branch) && git fetch origin && git merge --ff-only @{u}'
@@ -2809,6 +3319,140 @@ alias jiramyopentickets='ensure_sc2fa && jira list --query="assignee=currentUser
 alias jiramyopenstaletickets='ensure_sc2fa && jira list --query="assignee=currentUser() AND updated <= -14d AND resolution = Unresolved AND status != \"Won'\''t Fix\" ORDER BY updated ASC" --queryfields=status,updated,summary,customfield_10002,issuetype'
 alias grcc='type grcc; ./gradlew --configuration-cache'
 alias grclean='type grclean; ./gradlew --no-build-cache --rerun-tasks'
+
+# Paparazzi screenshot recording shortcuts. Gradle options such as
+# --tests can be passed after the preset, for example:
+#   recordreaderscreenshots --tests '*.AccessibilityScreenshotTest'
+_record_screenshot_help_requested() {
+  local arg
+  for arg in "$@"; do
+    if [ "$arg" = "-h" ] || [ "$arg" = "--help" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+_print_record_screenshot_tasks() {
+  echo "Gradle module(s):"
+  printf '  %s\n' "$@"
+}
+
+_run_record_paparazzi() {
+  ./gradlew --configuration-cache "$@"
+}
+
+record_paparazzi() {
+  if [ "$#" -eq 0 ]; then
+    echo "Usage: record_paparazzi <gradle task> [gradle options...]" >&2
+    return 2
+  fi
+
+  local -a gradle_tasks=()
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -*)
+        break
+        ;;
+      *)
+        gradle_tasks+=("$arg")
+        ;;
+    esac
+  done
+
+  if _record_screenshot_help_requested "$@"; then
+    printf '%s\n' "${gradle_tasks[@]}"
+    return 0
+  fi
+
+  _print_record_screenshot_tasks "${gradle_tasks[@]}"
+  _run_record_paparazzi "$@"
+}
+
+record_screenshots() {
+  if [ "$#" -eq 0 ]; then
+    echo "Usage: record_screenshots {standalone|reader|forms|updater|cots|ui|all|ios} [options...]" >&2
+    return 2
+  fi
+
+  if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    printf '%s\n' \
+      standalonepos:modules:views:screenshot-tests:recordPaparazziDebug \
+      :reader:modules:views:screenshot-tests:recordPaparazziDebug \
+      reader:modules:forms:screenshot-tests:recordPaparazziDebug \
+      :updater:modules:views:screenshot-tests:recordPaparazziDebug \
+      terminalsdk:cots:recordPaparazziDebug \
+      :core:modules:ui-components-screenshot-test:recordPaparazzi
+    return 0
+  fi
+
+  local preset="$1"
+  shift
+  local -a gradle_tasks=()
+
+  case "$preset" in
+    standalone)
+      gradle_tasks=(standalonepos:modules:views:screenshot-tests:recordPaparazziDebug)
+      ;;
+    reader)
+      gradle_tasks=(:reader:modules:views:screenshot-tests:recordPaparazziDebug)
+      ;;
+    forms)
+      gradle_tasks=(reader:modules:forms:screenshot-tests:recordPaparazziDebug)
+      ;;
+    updater)
+      gradle_tasks=(:updater:modules:views:screenshot-tests:recordPaparazziDebug)
+      ;;
+    cots)
+      gradle_tasks=(terminalsdk:cots:recordPaparazziDebug)
+      ;;
+    ui)
+      gradle_tasks=(:core:modules:ui-components-screenshot-test:recordPaparazzi)
+      ;;
+    all)
+      gradle_tasks=(
+        :core:modules:ui-components-screenshot-test:recordPaparazzi
+        terminalsdk:cots:recordPaparazziDebug
+        updater:modules:views:screenshot-tests:recordPaparazziDebug
+        reader:modules:forms:screenshot-tests:recordPaparazziDebug
+        reader:modules:views:screenshot-tests:recordPaparazziDebug
+      )
+      ;;
+    ios)
+      if _record_screenshot_help_requested "$@"; then
+        printf '%s\n' standalonepos/ios:record-screenshots
+        return 0
+      fi
+      echo "Screenshot target:"
+      echo "  standalonepos/ios:record-screenshots"
+      SKIP_XCODE_VERSION_CHECK=1 just -f standalonepos/ios/justfile -d standalonepos/ios record-screenshots "$@"
+      ;;
+    *)
+      echo "record_screenshots: unknown preset '$preset'" >&2
+      echo "Choose standalone, reader, forms, updater, cots, ui, all, or ios." >&2
+      return 2
+      ;;
+  esac
+
+  if _record_screenshot_help_requested "$@"; then
+    printf '%s\n' "${gradle_tasks[@]}"
+    return 0
+  fi
+
+  _print_record_screenshot_tasks "${gradle_tasks[@]}"
+  _run_record_paparazzi "${gradle_tasks[@]}" "$@"
+}
+
+alias recordstandalonescreenshots='record_screenshots standalone'
+alias recordreaderscreenshots='record_screenshots reader'
+alias recordformsscreenshots='record_screenshots forms'
+alias recordupdaterscreenshots='record_screenshots updater'
+alias recordcotsscreenshots='record_screenshots cots'
+alias recorduiscreenshots='record_screenshots ui'
+alias recordallscreenshots='record_screenshots all'
+alias recordiosscreenshots='record_screenshots ios'
+
 alias cibuildall='pay ci:build --all'
 
 cidownloadlogs()
@@ -2982,4 +3626,8 @@ gitpushtmp()
   fi
   echo $CMD
   $CMD || notify_failed
+}
+
+rgl() {
+  rg --color=always --heading --line-number "$@" | less -R
 }
